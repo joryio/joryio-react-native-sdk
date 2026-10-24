@@ -1,0 +1,90 @@
+buildscript {
+    // The host app's Kotlin when it declares one (every React Native template
+    // sets rootProject.ext.kotlinVersion), so the bridge compiles with the same
+    // compiler as the React Native it links against: react-android 0.84 is
+    // built with Kotlin 2.1, whose metadata a 1.9 compiler cannot read.
+    ext.kotlin_version = rootProject.ext.has('kotlinVersion') ? rootProject.ext.get('kotlinVersion') : '1.9.24'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+// This package's version, which is also the version of the native SDK it wraps:
+// the SDKs release in lockstep (sdk-version-parity.spec.ts).
+def joryioSdkVersion = new groovy.json.JsonSlurper().parse(file('../package.json')).version
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+android {
+    namespace "io.joryio.reactnative"
+    // The app's compileSdk when it sets one, as React Native libraries do.
+    compileSdkVersion safeExtGet('compileSdkVersion', 34)
+
+    defaultConfig {
+        // The native SDK this wraps (packages/sdk-android) declares minSdk 23,
+        // and manifest merging takes the MAX across libraries - so the effective
+        // floor for any consumer is 23 whatever is written here. This used to
+        // claim the native SDK was 21 (audit 2026-09-26, R24); it never was.
+        //
+        // Kept below the native floor on purpose. A thin bridge must never be
+        // the library that RAISES it: 24 here silently made every React Native
+        // consumer minSdk 24 and broke the stock RN 0.75 template (which
+        // generates 23) with
+        //   uses-sdk:minSdkVersion 23 cannot be smaller than version 24
+        //   declared in library [:joryio_react-native-sdk]
+        // The bridge itself uses no API above 21 - it only forwards calls.
+        minSdkVersion 21
+        targetSdkVersion safeExtGet('targetSdkVersion', 34)
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['src/main/java']
+        }
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    implementation "com.facebook.react:react-android:+"
+    // BASE + UI, deliberately. An RN app that installs this package and writes
+    // no JavaScript still sees in-app messages, rendered by the native views.
+    // "install the SDK, send a campaign, see it appear" is the thing that
+    // decides whether an integration succeeds.
+    //
+    // The opt-out already works and stays: calling Joryio.onInAppMessage() from
+    // JS invokes enableInAppMessages(), which sets the native callback and
+    // flips hostHandlesDisplay, so the SDK stops drawing and hands messages to
+    // React. An app that wants to render in React gets to; an app that does
+    // nothing is not left with a silently dead channel.
+    //
+    // WHERE the native SDK comes from. A published install resolves it from
+    // Maven Central at this package's own version - `-ui` pulls the base
+    // artifact at the same exact version, so one coordinate is the whole
+    // dependency. An app that builds the native SDK from source instead
+    // includes it as the `:joryio-sdk` and `:joryio-sdk-ui` Gradle projects in
+    // its settings.gradle, and those win when present. Before 2026-10-06 ONLY
+    // the source form existed, which a public npm install cannot satisfy: the
+    // package does not ship the native sources, so the build failed with
+    // "Project with path ':joryio-sdk' could not be found".
+    if (rootProject.findProject(':joryio-sdk') != null) {
+        implementation project(':joryio-sdk')
+        implementation project(':joryio-sdk-ui')
+    } else {
+        implementation "io.joryio:joryio-android-ui:${joryioSdkVersion}"
+    }
+}
