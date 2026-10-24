@@ -100,16 +100,19 @@ export interface JoryioConfig {
   sdkAuthenticationToken?: string;
 
   /**
-   * Allow in-app messages authored as HTML, which can execute JavaScript
-   * inside your app.
+   * Allow in-app messages authored as HTML, which the native SDK shows in a
+   * web view inside your app. Passed through to the native iOS and Android
+   * SDKs.
    *
-   * OFF BY DEFAULT. The server strips `<script>` and every `on*` handler
-   * before sending, so author JavaScript does not run in normal operation. The
-   * document is still rendered in a web view that can execute script, so the
-   * residual risk is a sanitiser bypass - and because the document is authored
-   * server-side, a compromised marketing account would then mean code
-   * executing in every user's session, which is why regulated apps often
-   * prohibit it outright.
+   * OFF BY DEFAULT. The server keeps the markup as written (only `<base>` and
+   * meta refresh are removed). Scripts and `on*` handlers in it do NOT run:
+   * the native SDKs show the document under a Content-Security-Policy where
+   * only their own bridge executes, and the bridge handles buttons and forms.
+   * The web view can still execute script, so the residual risk is a gap in
+   * that policy - and because the document is authored server-side, a
+   * compromised marketing account would then mean code executing in every
+   * user's session, which is why regulated apps often prohibit a web view
+   * outright.
    *
    * Leaving this off does NOT disable in-app messaging: native messages still
    * display, because they are data your app renders with its own components.
