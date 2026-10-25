@@ -257,7 +257,7 @@ describe('consent model A on the JS side', () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('jry_sdk_key', 'host', { enableDebug: true });
-    expect(native.initialize.mock.calls[0][2]).toEqual({ enableDebug: true });
+    expect(native.initialize.mock.calls[0][2]).toEqual({ enableDebug: true, holdInAppMessagesForHandler: true });
   });
 
   it("updateConsent accepts 'pending' and refuses anything else", async () => {

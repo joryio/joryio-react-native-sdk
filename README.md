@@ -150,6 +150,7 @@ All options are optional:
 | `anonymousId` | `string` | generated | Use your own anonymous ID |
 | `requestPushPermissionAtLaunch` | `boolean` | `false` | Ask for notification permission at startup. Prefer asking at a moment the user understands |
 | `allowHtmlJsInAppMessages` | `boolean` | `false` | Allow HTML in-app messages (see below) |
+| `holdInAppMessagesForHandler` | `boolean` | `false` | Your app subscribes with `onInAppMessage` after `initialize()` has completed: hold in-app messages until it does, so none is drawn natively first |
 | `enableSdkAuthentication` | `boolean` | `false` | Attach a customer-minted JWT to every ingest request |
 | `sdkAuthenticationToken` | `string` | - | Initial JWT |
 | `trackingConsent` | `'granted' \| 'denied' \| 'pending'` | unset | Consent at startup. Leave it unset unless your consent banner has an answer - see [Privacy controls](#privacy-controls) |
@@ -261,6 +262,8 @@ Report `'dismissed'` whenever the message leaves the screen, including after a c
 A form inside an HTML message you render yourself is submitted with `submitInAppForm(campaignId, values)`, which resolves `{ ok, message?, redirect?, errors? }` and never rejects.
 
 Native button actions are `dismiss`, `url` (open `url` in the browser), `deep_link` (route to `url` inside your app) and `request_push_permission` - a push primer's "yes" button: close the message and call `Joryio.requestPushPermission()`.
+
+Subscribe before `initialize()` has completed (at module scope, or in an effect that runs at start-up) and no message is ever drawn natively, not even the first: the SDK holds in-app messages until `initialize()` has completed and your subscription has reached native. If you subscribe later - on a screen that mounts after `initialize()` - pass `holdInAppMessagesForHandler: true` to `initialize()`, and messages ready before you subscribe are held for your listener (`disableInAppMessages()` instead lets the native SDK draw them).
 
 An empty `capabilities` list means the same as leaving it out (not declared) on both platforms. `enableInAppMessages(capabilities?)` and `disableInAppMessages()` are the lower-level pair `onInAppMessage` uses; call them yourself only if you listen for the `JoryioInAppMessage` event another way.
 

@@ -165,6 +165,7 @@ describe('tracking consent', () => {
     expect(native.initialize).toHaveBeenCalledWith('key', 'host', {
       trackingConsent: 'pending',
       optOut: true,
+      holdInAppMessagesForHandler: true,
     });
   });
 
@@ -185,12 +186,12 @@ describe('tracking consent', () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('key', 'host', { trackingConsent: 'Denied' as 'denied' });
-    expect(native.initialize).toHaveBeenLastCalledWith('key', 'host', { trackingConsent: 'denied' });
+    expect(native.initialize).toHaveBeenLastCalledWith('key', 'host', { trackingConsent: 'denied', holdInAppMessagesForHandler: true });
 
     const other = makeNative();
     const { default: Second } = loadSdk(other);
     await Second.initialize('key', 'host', { trackingConsent: 'yes' as 'granted', optOut: false });
-    expect(other.initialize).toHaveBeenLastCalledWith('key', 'host', { optOut: false });
+    expect(other.initialize).toHaveBeenLastCalledWith('key', 'host', { optOut: false, holdInAppMessagesForHandler: true });
     expect(warnSpy.mock.calls.flat().join('\n')).toContain("trackingConsent takes 'granted', 'denied' or 'pending'");
   });
 
@@ -283,6 +284,10 @@ describe('in-app messages', () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('key', 'host');
+    // Nobody was listening when initialize() completed: the start-up hold
+    // ended with native drawing (see in-app-takeover.test.ts).
+    expect(native.disableInAppMessages).toHaveBeenCalledTimes(1);
+    native.disableInAppMessages.mockClear();
     const offA = Joryio.onInAppMessage(() => {});
     const offB = Joryio.onInAppMessage(() => {});
     expect(native.enableInAppMessages).toHaveBeenCalledTimes(2);
@@ -345,14 +350,14 @@ describe('null and undefined from host code (contract item 19)', () => {
       enableDebug: true,
       logLevel: null as unknown as 'debug',
     });
-    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { enableDebug: true });
+    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { enableDebug: true, holdInAppMessagesForHandler: true });
   });
 
   it('a null config object is an empty one', async () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('key', 'host', null as unknown as object);
-    expect(native.initialize).toHaveBeenCalledWith('key', 'host', {});
+    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { holdInAppMessagesForHandler: true });
   });
 
   it('a null sdkKey warns and does not switch the SDK off', async () => {

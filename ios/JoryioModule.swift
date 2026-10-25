@@ -172,6 +172,13 @@ class JoryioModule: RCTEventEmitter {
     // it; without this arm the same JS config silently did nothing on iOS and
     // an app that opted in still had every HTML campaign skipped.
     let allowHtmlJsInAppMessages = config["allowHtmlJsInAppMessages"] as? Bool ?? false
+    // Sent by the JS layer on EVERY initialize(): native holds in-app messages
+    // until JS has had its chance to subscribe, so the first sync can no
+    // longer draw natively the message an onInAppMessage app meant to draw
+    // itself. JS ends the hold with enableInAppMessages (its listener takes
+    // the message) or disableInAppMessages (nobody listens; native draws it).
+    // Same key as the Android bridge.
+    let holdInAppMessagesForHandler = config["holdInAppMessagesForHandler"] as? Bool ?? false
 
     // Consent and opt-out at start-up, the same options every Joryio SDK takes.
     // Missing here, so an RN app could only opt out AFTER initialize() - by
@@ -204,7 +211,10 @@ class JoryioModule: RCTEventEmitter {
         sessionTimeout: sessionTimeout,
         trackSessionStart: trackSessionStart,
         requestPushPermissionAtLaunch: requestPushPermissionAtLaunch,
-        inApp: InAppConfig(allowHtmlJsInAppMessages: allowHtmlJsInAppMessages),
+        inApp: InAppConfig(
+          allowHtmlJsInAppMessages: allowHtmlJsInAppMessages,
+          holdInAppMessagesForHandler: holdInAppMessagesForHandler
+        ),
         requestTimeout: requestTimeout,
         enableSdkAuthentication: enableSdkAuthentication,
         sdkAuthenticationToken: sdkAuthenticationToken,
@@ -224,7 +234,10 @@ class JoryioModule: RCTEventEmitter {
         sessionTimeout: sessionTimeout,
         trackSessionStart: trackSessionStart,
         requestPushPermissionAtLaunch: requestPushPermissionAtLaunch,
-        inApp: InAppConfig(allowHtmlJsInAppMessages: allowHtmlJsInAppMessages),
+        inApp: InAppConfig(
+          allowHtmlJsInAppMessages: allowHtmlJsInAppMessages,
+          holdInAppMessagesForHandler: holdInAppMessagesForHandler
+        ),
         requestTimeout: requestTimeout,
         enableSdkAuthentication: enableSdkAuthentication,
         sdkAuthenticationToken: sdkAuthenticationToken,
