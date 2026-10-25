@@ -100,16 +100,19 @@ export interface JoryioConfig {
   sdkAuthenticationToken?: string;
 
   /**
-   * Allow in-app messages authored as HTML, which can execute JavaScript
-   * inside your app.
+   * Allow in-app messages authored as HTML, which the native SDK shows in a
+   * web view inside your app. Passed through to the native iOS and Android
+   * SDKs.
    *
-   * OFF BY DEFAULT. The server strips `<script>` and every `on*` handler
-   * before sending, so author JavaScript does not run in normal operation. The
-   * document is still rendered in a web view that can execute script, so the
-   * residual risk is a sanitiser bypass - and because the document is authored
-   * server-side, a compromised marketing account would then mean code
-   * executing in every user's session, which is why regulated apps often
-   * prohibit it outright.
+   * OFF BY DEFAULT. The server keeps the markup as written (only `<base>` and
+   * meta refresh are removed). Scripts and `on*` handlers in it do NOT run:
+   * the native SDKs show the document under a Content-Security-Policy where
+   * only their own bridge executes, and the bridge handles buttons and forms.
+   * The web view can still execute script, so the residual risk is a gap in
+   * that policy - and because the document is authored server-side, a
+   * compromised marketing account would then mean code executing in every
+   * user's session, which is why regulated apps often prohibit a web view
+   * outright.
    *
    * Leaving this off does NOT disable in-app messaging: native messages still
    * display, because they are data your app renders with its own components.
@@ -219,7 +222,25 @@ export interface SdkAuthError {
  */
 export type InAppMessage = InAppMessageBase &
   (
-    | { kind: 'html'; html: string; css: string }
+    | {
+        kind: 'html';
+        html: string;
+        css: string;
+        /**
+         * Widest the message may be, in points/dp, for `modal` and `slideup`
+         * (absent otherwise). Your renderer gives the web view
+         * min(maxWidth, screen width - your margins) BEFORE the content lays
+         * out, so the author's media queries see the real width, and lets only
+         * the height follow the content. Default when the server sends none:
+         * modal 600, slideup 400 - the same as every SDK.
+         *
+         * Measure the height from `document.body` (with
+         * `body{display:flow-root}`), not `document.documentElement`: the
+         * root's scrollHeight is never below the web view's own height, so a
+         * message sized from it can grow but never shrink.
+         */
+        maxWidth?: number;
+      }
     | {
         kind: 'native';
         title?: string;

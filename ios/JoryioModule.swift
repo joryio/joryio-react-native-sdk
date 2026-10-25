@@ -166,8 +166,9 @@ class JoryioModule: RCTEventEmitter {
 
     // In-app: HTML messages render in a web view that can execute script (the
     // SDK's own bridge runs there), so this is opt-in and OFF by default. The
-    // server strips <script> and on* handlers, so author JS does not run in
-    // normal operation - the residual risk is a sanitiser bypass. The Android bridge already forwarded
+    // server keeps the markup as written; author <script> and on* handlers do
+    // not run because sdk-ios shows the document under `script-src 'none'`
+    // with the bridge injected outside it. The Android bridge already forwarded
     // it; without this arm the same JS config silently did nothing on iOS and
     // an app that opted in still had every HTML campaign skipped.
     let allowHtmlJsInAppMessages = config["allowHtmlJsInAppMessages"] as? Bool ?? false
@@ -784,6 +785,9 @@ class JoryioModule: RCTEventEmitter {
         params["kind"] = "html"
         params["html"] = html
         params["css"] = css
+        // The resolved width cap (modal / slideup only); the host draws the
+        // message, so it needs the number.
+        if let maxWidth = campaign.maxWidth { params["maxWidth"] = maxWidth }
 
       case let .native(native):
         params["kind"] = "native"

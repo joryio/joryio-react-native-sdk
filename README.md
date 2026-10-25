@@ -19,7 +19,7 @@ Every call forwards to the native SDK, so batching, offline queueing, retries an
 
 ## Requirements
 
-- React Native 0.72 or newer. Old and New Architecture both work; on the New Architecture the module runs through React Native's interop layer for legacy modules, which is on by default
+- React Native 0.75 or newer (on iOS the native SDK is linked as a Swift package through React Native's `spm_dependency`, added in 0.75); with Expo, SDK 52 or newer. Old and New Architecture both work; on the New Architecture the module runs through React Native's interop layer for legacy modules, which is on by default
 - iOS 14.0+
 - Android 6.0 (API level 23)+
 - A Joryio workspace with an **iOS app** and an **Android app**, each with its own SDK key (`jry_sdk_ios_...`, `jry_sdk_android_...`) from **Settings → Apps** in the dashboard
@@ -36,11 +36,15 @@ The package is autolinked on both platforms. Do not also register `JoryioPackage
 
 ### iOS
 
-The native dependency is the `Joryio/UI` pod from CocoaPods (tracking, identity, push and in-app display). The SDK needs iOS 14.0, while some React Native versions default lower, so raise the platform in `ios/Podfile`:
+The native dependency is the Joryio iOS SDK's **Swift package** (`https://github.com/joryio/joryio-ios-sdk`, products `Joryio` and `JoryioUI`: tracking, identity, push and in-app display), pinned to this package's version. `pod install` adds it to the Pods project through React Native's `spm_dependency`, and Xcode downloads it on the first build, which needs network access to `github.com`. Nothing comes from CocoaPods trunk, which stops accepting new versions on 2 December 2026.
+
+The SDK needs iOS 14.0, while some React Native versions default lower, so raise the platform in `ios/Podfile`:
 
 ```ruby
 platform :ios, [min_ios_version_supported, '14.0'].max
 ```
+
+Also raise the app's own deployment target to 14.0 or higher: in Xcode, select the app target, then **General → Minimum Deployments → iOS** (the `IPHONEOS_DEPLOYMENT_TARGET` build setting in `ios/<YourApp>.xcodeproj`). A fresh React Native 0.75 app stays at 13.4 there after the Podfile change, and the linker then warns that the Joryio objects were built for a newer iOS version than the app.
 
 Then:
 
@@ -48,13 +52,17 @@ Then:
 cd ios && pod install
 ```
 
+React Native prints two `[SPM] WARNING` lines during `pod install` for any library that uses Swift packages (reopen the workspace on Xcode 15 or earlier; the package is linked statically). If your app then fails to link, install with `USE_FRAMEWORKS=dynamic pod install`.
+
+Upgrading from a version that used the `Joryio/UI` pod: if you added a `pod 'Joryio...'` line to your Podfile yourself, delete it and run `pod install` again.
+
 ### Android
 
 Nothing to add. The bridge depends on `io.joryio:joryio-android-ui` from Maven Central, at the same version as this package; React Native projects already list `mavenCentral()` in their repositories.
 
 ### Expo
 
-The SDK is a native module, so it does not run in Expo Go. Use a development build (`npx expo prebuild` or EAS Build). Expo's default iOS deployment target can be lower than the 14.0 the SDK needs; raise it with `expo-build-properties` in `app.json`:
+The SDK is a native module, so it does not run in Expo Go. Use a development build (`npx expo prebuild` or EAS Build) on Expo SDK 52 or newer. Expo's default iOS deployment target can be lower than the 14.0 the SDK needs; raise it with `expo-build-properties` in `app.json`:
 
 ```json
 {
@@ -77,7 +85,7 @@ If you build the native SDKs from a checkout instead of the registries:
   project(':joryio-sdk-ui').projectDir = new File(rootProject.projectDir, '../path/to/joryio-android-sdk/joryio-ui')
   ```
 
-- **iOS** - point CocoaPods at the checkout in `ios/Podfile`: `pod 'Joryio', :path => '../path/to/joryio-ios-sdk'`. The bridge pins the `Joryio/UI` pod to its own version exactly, so the checkout must be at the same version.
+- **iOS** - set `JORYIO_IOS_SDK_SPM_URL` when you run `pod install`: another git URL for the Swift package (it must carry a tag equal to this package's version), or, on React Native 0.84 and newer, the absolute path of a `joryio-ios-sdk` checkout: `JORYIO_IOS_SDK_SPM_URL=/abs/path/to/joryio-ios-sdk pod install`.
 
 If you link this package from a source checkout rather than installing it from npm, run `npm run build` in it once: `main` points at the compiled `lib/`, which is built on publish and is not in the repository.
 
@@ -218,7 +226,7 @@ Also available: `isPushEnabled()` and `unregisterPush()`, which stops pushes to 
 
 **Messages display on their own.** Install the SDK, send a campaign, and the native SDK draws it with your app's fonts, colours and dark mode. Impressions, clicks and dismissals are tracked for you.
 
-HTML messages are off by default, because they run inside your app; pass `allowHtmlJsInAppMessages: true` to `initialize` to opt in. Native messages display either way.
+HTML messages are off by default, because the native SDK shows them in a web view inside your app; pass `allowHtmlJsInAppMessages: true` to `initialize` to opt in. Scripts written into a message do not run there - only the native SDK's bridge does, and it handles buttons and forms. Native messages display either way.
 
 ### Rendering messages in React
 
