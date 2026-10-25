@@ -785,6 +785,9 @@ class JoryioModule: RCTEventEmitter {
         params["kind"] = "html"
         params["html"] = html
         params["css"] = css
+        // The resolved width cap (modal / slideup only); the host draws the
+        // message, so it needs the number.
+        if let maxWidth = campaign.maxWidth { params["maxWidth"] = maxWidth }
 
       case let .native(native):
         params["kind"] = "native"

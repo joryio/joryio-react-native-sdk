@@ -933,6 +933,9 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
                         putString("kind", "html")
                         putString("html", content.html)
                         putString("css", content.css)
+                        // The resolved width cap (modal / slideup only); the
+                        // host draws the message, so it needs the number.
+                        campaign.maxWidth?.let { putInt("maxWidth", it) }
                     }
                     is InAppContent.Native -> {
                         putString("kind", "native")

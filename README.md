@@ -44,6 +44,8 @@ The SDK needs iOS 14.0, while some React Native versions default lower, so raise
 platform :ios, [min_ios_version_supported, '14.0'].max
 ```
 
+Also raise the app's own deployment target to 14.0 or higher: in Xcode, select the app target, then **General → Minimum Deployments → iOS** (the `IPHONEOS_DEPLOYMENT_TARGET` build setting in `ios/<YourApp>.xcodeproj`). A fresh React Native 0.75 app stays at 13.4 there after the Podfile change, and the linker then warns that the Joryio objects were built for a newer iOS version than the app.
+
 Then:
 
 ```bash

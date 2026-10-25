@@ -222,7 +222,25 @@ export interface SdkAuthError {
  */
 export type InAppMessage = InAppMessageBase &
   (
-    | { kind: 'html'; html: string; css: string }
+    | {
+        kind: 'html';
+        html: string;
+        css: string;
+        /**
+         * Widest the message may be, in points/dp, for `modal` and `slideup`
+         * (absent otherwise). Your renderer gives the web view
+         * min(maxWidth, screen width - your margins) BEFORE the content lays
+         * out, so the author's media queries see the real width, and lets only
+         * the height follow the content. Default when the server sends none:
+         * modal 600, slideup 400 - the same as every SDK.
+         *
+         * Measure the height from `document.body` (with
+         * `body{display:flow-root}`), not `document.documentElement`: the
+         * root's scrollHeight is never below the web view's own height, so a
+         * message sized from it can grow but never shrink.
+         */
+        maxWidth?: number;
+      }
     | {
         kind: 'native';
         title?: string;
