@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.2 - 2026-10-25
+
+Fixed: an app that subscribes with `onInAppMessage` could get its first in-app message drawn by the native SDK. The subscription is held until `initialize()` completes, and the sync native `initialize()` starts could finish first - seen on Android, where clicks and forms on that message then went through native-only paths; the same window existed on iOS. The SDK now always asks native to hold in-app messages at `initialize()`, and ends the hold once `initialize()` has completed and the held calls have run: your listener takes the held message, or, with nobody subscribed, the native SDK draws it. No message is drawn twice or lost.
+
+Added: `holdInAppMessagesForHandler` in the `initialize()` config, for an app that subscribes AFTER `initialize()` has completed (a screen that mounts later): messages ready before the subscription are held for it. `disableInAppMessages()` instead lets the native SDK draw them. The same option, by the same name, on iOS, Android and Unity.
+
 ## 1.3.1 - 2026-10-24
 
 Changed: on iOS the bridge now takes the Joryio iOS SDK as a Swift package (`https://github.com/joryio/joryio-ios-sdk.git`, products `Joryio` and `JoryioUI`, pinned to exactly this version) through React Native's `spm_dependency`, instead of the `Joryio` CocoaPods pod. `pod install` works as before; Xcode resolves the package when the app builds.

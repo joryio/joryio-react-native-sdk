@@ -120,6 +120,25 @@ export interface JoryioConfig {
   allowHtmlJsInAppMessages?: boolean;
 
   /**
+   * Your app draws in-app messages itself ({@link JoryioSDK.onInAppMessage})
+   * and subscribes AFTER `initialize()` has completed - for example on a
+   * screen that mounts later. Until that subscription, the SDK draws nothing:
+   * a message that is ready meanwhile is held (not drawn, not reported,
+   * nothing spent) and handed to your listener when it subscribes.
+   * Calling {@link JoryioSDK.disableInAppMessages} instead ends the hold and
+   * the native SDK draws the held message. Off by default.
+   *
+   * You do NOT need it when you subscribe before `initialize()` completes -
+   * at module scope, or in an effect that runs at start-up: the SDK holds
+   * every message until `initialize()` has completed and your subscription
+   * has reached native, then hands rendering to the native SDK only if
+   * nobody subscribed.
+   *
+   * Same option, same name, on iOS, Android and Unity.
+   */
+  holdInAppMessagesForHandler?: boolean;
+
+  /**
    * Tracking consent at start-up. Same option and values as the web, iOS,
    * Android and Unity SDKs.
    *
@@ -709,6 +728,12 @@ class JoryioSDK {
   private _warnedDroppedWhileOptedOut = false;
   /** Live onInAppMessage subscriptions. Rendering is handed to JS only while > 0. */
   private _inAppListeners = 0;
+  /**
+   * Rendering is handed to JS: an onInAppMessage listener or a direct
+   * enableInAppMessages() is in force. Read when initialize() completes, to
+   * decide whether the start-up hold ends with native drawing.
+   */
+  private _inAppHandedToJs = false;
 
   constructor() {
     this._ready = new Promise<void>((resolve) => {
@@ -1177,7 +1202,20 @@ class JoryioSDK {
       });
     }
     let failure: { error: unknown } | null = null;
+    let releaseInAppHold = false;
     const forNative = nativeConfig(config);
+    // The first sync can finish before the onInAppMessage subscription
+    // reaches native - that subscription is held here until initialize()
+    // completes - and native then drew the one message the app meant to draw
+    // itself (found testing 1.3.1-beta.2 on Android; the same window exists
+    // on iOS). So native ALWAYS starts holding in-app messages, and the hold
+    // ends once initialize() has completed and the held calls have run:
+    // with the app's listener (its enableInAppMessages takes the held
+    // message), or with nobody listening (disableInAppMessages below, and
+    // native draws it). `holdInAppMessagesForHandler: true` from the app
+    // keeps the hold until its listener subscribes, however late.
+    const appHoldsForHandler = forNative.holdInAppMessagesForHandler === true;
+    forNative.holdInAppMessagesForHandler = true;
     if (!this._initialized) {
       // Calls made while this init is in flight are judged with its config
       // (contract v9 91): native applies it before replaying them.
@@ -1201,6 +1239,7 @@ class JoryioSDK {
       this._initConfigDenied = null;
       if (failure === null) {
         this._pending.forEach((call) => delete call.madeInWindow);
+        releaseInAppHold = !appHoldsForHandler;
         this._initialized = true;
         this._wipeHandedToNative = false;
         return;
@@ -1234,6 +1273,11 @@ class JoryioSDK {
       // each throwing its own red box.
       this._markReady();
       this._drainPending();
+      // After the held calls, so a subscription made before initialize()
+      // completed has already taken the held message.
+      if (releaseInAppHold && !this._inAppHandedToJs) {
+        this._dispatch(() => JoryioModule.disableInAppMessages());
+      }
     }
   }
 
@@ -1794,6 +1838,14 @@ class JoryioSDK {
    * A callback that throws (or returns a promise that rejects) is caught and
    * logged; it never crashes the app or stops other listeners.
    *
+   * Subscribe before `initialize()` has completed (at module scope, or in an
+   * effect that runs at start-up) and no message is ever drawn natively: the SDK holds every message
+   * until `initialize()` has completed and this subscription has reached
+   * native, then hands the held one to you. If you subscribe LATER (a screen
+   * that mounts after initialize() has completed), pass
+   * `holdInAppMessagesForHandler: true` to initialize(), or the native SDK
+   * draws what is ready before you subscribe.
+   *
    * Unsubscribing the LAST listener hands rendering back to the native SDK, so
    * messages that arrive afterwards are drawn natively instead of being handed
    * to a listener that no longer exists. Before 1.3.0 they were silently lost
@@ -1822,6 +1874,7 @@ class JoryioSDK {
     // SDK is ready and then replays it, in order with the matching disable.
     // Declared capabilities describe YOUR renderer, not the SDK's.
     const capabilities = normalizeCapabilities(options?.capabilities);
+    this._inAppHandedToJs = true;
     this._dispatch(() => JoryioModule.enableInAppMessages(capabilities));
 
     let removed = false;
@@ -1832,6 +1885,7 @@ class JoryioSDK {
       subscription.remove();
       this._inAppListeners = Math.max(0, this._inAppListeners - 1);
       if (this._inAppListeners === 0) {
+        this._inAppHandedToJs = false;
         this._dispatch(() => JoryioModule.disableInAppMessages());
       }
     };
@@ -1848,6 +1902,7 @@ class JoryioSDK {
    */
   enableInAppMessages(capabilities?: string[]): void {
     const declared = normalizeCapabilities(capabilities);
+    this._inAppHandedToJs = true;
     this._dispatch(() => JoryioModule.enableInAppMessages(declared));
   }
 
@@ -1857,6 +1912,7 @@ class JoryioSDK {
    * does this for you.
    */
   disableInAppMessages(): void {
+    this._inAppHandedToJs = false;
     this._dispatch(() => JoryioModule.disableInAppMessages());
   }
 

@@ -67,6 +67,15 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
             config.optBoolean("allowHtmlJsInAppMessages")?.let {
                 joryioConfig = joryioConfig.copy(allowHtmlJsInAppMessages = it)
             }
+            // Sent by the JS layer on EVERY initialize(): native holds in-app
+            // messages until JS has had its chance to subscribe, so the first
+            // sync can no longer draw natively the message an onInAppMessage
+            // app meant to draw itself. JS ends the hold with
+            // enableInAppMessages (its listener takes the message) or
+            // disableInAppMessages (nobody listens; native draws it).
+            config.optBoolean("holdInAppMessagesForHandler")?.let {
+                joryioConfig = joryioConfig.copy(holdInAppMessagesForHandler = it)
+            }
             config.optBoolean("requestPushPermissionAtLaunch")?.let {
                 joryioConfig = joryioConfig.copy(requestPushPermissionAtLaunch = it)
             }

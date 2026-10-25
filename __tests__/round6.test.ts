@@ -222,7 +222,7 @@ describe('S4: notificationChannelName', () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native, 'android');
     await Joryio.initialize('jry_sdk_android_x', 'h', { notificationChannelName: 'התראות' });
-    expect(native.initialize.mock.calls[0][2]).toEqual({ notificationChannelName: 'התראות' });
+    expect(native.initialize.mock.calls[0][2]).toEqual({ notificationChannelName: 'התראות', holdInAppMessagesForHandler: true });
   });
 
   it('is read by the Android bridge into the native config', () => {
