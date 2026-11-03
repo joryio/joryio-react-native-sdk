@@ -576,6 +576,20 @@ const READY_TIMEOUT_MS = 5000;
 export const MAX_PRE_INIT_CALLS = 1000;
 
 /**
+ * How long (ms) an in-app message must have been on screen before it counts as
+ * displayed - the same name and value on every Joryio SDK. Messages the native
+ * SDK draws follow it by themselves: `in_app.displayed` is reported, and the
+ * campaign's frequency cap spent, only after the message has been visible this
+ * long with the app in the foreground (a tap or a close before then counts as
+ * seen). A message that leaves the screen sooner - a screen change, the app
+ * going to the background - is not counted and stays eligible.
+ *
+ * A message YOUR app draws ({@link Joryio.onInAppMessage}) is reported by you:
+ * apply the same rule - see {@link Joryio.trackInAppImpression}.
+ */
+export const IN_APP_DISPLAY_DWELL_MS = 1000;
+
+/**
  * What a held call is, which decides what a later privacy decision discards
  * and what a full hold drops first.
  *
@@ -1803,11 +1817,17 @@ class JoryioSDK {
    * therefore YOU MUST REPORT what happened via {@link trackInAppImpression}.
    * The SDK cannot see a message it did not draw. Handing a message to you
    * neither emits `in_app.displayed` nor spends the campaign's frequency
-   * budget: both happen when you report `'displayed'`, once, as the message
-   * appears - the same rule on iOS and Android. Report it exactly once per
-   * message you show; a message you never report counts toward no frequency
-   * cap and reads as delivered to nobody, which also breaks revenue
-   * attribution, which joins on that event.
+   * budget: both happen when you report `'displayed'`, once - the same rule on
+   * iOS and Android. Report it exactly once per message you show; a message you
+   * never report counts toward no frequency cap and reads as delivered to
+   * nobody, which also breaks revenue attribution, which joins on that event.
+   *
+   * Report `'displayed'` only once the person could have seen the message:
+   * after it has been on screen for {@link IN_APP_DISPLAY_DWELL_MS} with the
+   * app in the foreground - or sooner if they tap or close it, which shows
+   * they saw it. If it leaves the screen before then (a navigation, the app
+   * going to the background), do not report it: it is not counted and stays
+   * eligible. This is what the native SDKs do for the messages they draw.
    *
    * Declare what YOUR renderer can draw via `options.capabilities`. Campaigns
    * are targeted on it, and an undeclared capability is read as "cannot" rather
@@ -1820,9 +1840,16 @@ class JoryioSDK {
    * ```ts
    * const unsubscribe = Joryio.onInAppMessage((message) => {
    *   showMyOwnUI(message);
-   *   Joryio.trackInAppImpression(message.id, 'displayed');
-   *   // ... 'clicked' (with the button's id) when a button is tapped, and
-   *   // 'dismissed' whenever the message leaves the screen - after a click too.
+   *   // Counted once it has been visible for the dwell; cancel this timer if
+   *   // the message leaves the screen (or the app backgrounds) first.
+   *   const seen = setTimeout(
+   *     () => Joryio.trackInAppImpression(message.id, 'displayed'),
+   *     IN_APP_DISPLAY_DWELL_MS,
+   *   );
+   *   // ... on a tap or close before then: clearTimeout(seen) and report
+   *   // 'displayed' first. Then 'clicked' (with the button's id) when a button
+   *   // is tapped, and 'dismissed' whenever the message leaves the screen -
+   *   // after a click too.
    * });
    *
    * // Later:
@@ -1936,8 +1963,10 @@ class JoryioSDK {
    * Report what happened to an in-app message YOUR app rendered.
    *
    * @param campaignId the message's `id`
-   * @param action     `'displayed'` once when it appears (this is also what
-   *                   spends the campaign's frequency budget), `'clicked'`
+   * @param action     `'displayed'` once it has been on screen for
+   *                   {@link IN_APP_DISPLAY_DWELL_MS} (or when the person taps
+   *                   or closes it sooner; this is also what spends the
+   *                   campaign's frequency budget), `'clicked'`
    *                   when a button is tapped, and `'dismissed'` whenever it
    *                   leaves the screen - after a click too, because the
    *                   message holds the display slot until then

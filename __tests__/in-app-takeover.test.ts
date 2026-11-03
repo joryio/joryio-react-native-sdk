@@ -129,3 +129,21 @@ describe('the native bridges read holdInAppMessagesForHandler', () => {
     expect(src.match(/holdInAppMessagesForHandler: holdInAppMessagesForHandler/g)).toHaveLength(2);
   });
 });
+
+describe('the in-app display dwell (BACKLOG D320)', () => {
+  it('exports IN_APP_DISPLAY_DWELL_MS - the same name and value on every SDK', () => {
+    const mod = loadSdk(makeNative()) as any;
+    expect(mod.IN_APP_DISPLAY_DWELL_MS).toBe(1000);
+  });
+
+  it('a message the app draws is reported only when the app reports it - nothing on hand-off', async () => {
+    const native = makeNative();
+    const { default: Joryio } = loadSdk(native);
+    await Joryio.initialize('jry_sdk_ios_x', 'h', {});
+    Joryio.onInAppMessage(() => {});
+    await flush();
+    // The JS layer never reports a display on the app's behalf: when the
+    // person could have seen it is the app's to decide (the dwell rule).
+    expect(native.trackInAppImpression).not.toHaveBeenCalled();
+  });
+});

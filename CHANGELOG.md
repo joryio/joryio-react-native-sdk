@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.3 - 2026-11-03
+
+Fixed (from the iOS and Android SDKs this bridge uses): an in-app message the native SDK draws counts as displayed only once someone could have seen it. It is shown only on a screen that is in the foreground and not mid-transition or closing, and `in_app.displayed` is reported - and the campaign's frequency cap spent - only after it has been on screen for `IN_APP_DISPLAY_DWELL_MS` (1000 ms) with the app in the foreground. A tap or a close before then counts as seen (displayed first, then the click or dismissal); a message that leaves the screen sooner is not counted and stays eligible. Before, a message drawn during a screen change was counted and could use up its cap unseen.
+
+Added: `IN_APP_DISPLAY_DWELL_MS` is exported. If your app draws in-app messages itself (`onInAppMessage`), report `'displayed'` by the same rule - see `trackInAppImpression`. No bridge or wire changes.
+
 ## 1.3.2 - 2026-10-25
 
 Fixed: an app that subscribes with `onInAppMessage` could get its first in-app message drawn by the native SDK. The subscription is held until `initialize()` completes, and the sync native `initialize()` starts could finish first - seen on Android, where clicks and forms on that message then went through native-only paths; the same window existed on iOS. The SDK now always asks native to hold in-app messages at `initialize()`, and ends the hold once `initialize()` has completed and the held calls have run: your listener takes the held message, or, with nobody subscribed, the native SDK draws it. No message is drawn twice or lost.
