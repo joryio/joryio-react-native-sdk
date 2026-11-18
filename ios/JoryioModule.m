@@ -20,7 +20,12 @@ RCT_EXTERN_METHOD(identify:(NSString *)userId)
 RCT_EXTERN_METHOD(addAlias:(NSString *)aliasLabel
                   aliasName:(NSString *)aliasName)
 
+RCT_EXTERN_METHOD(identifyFromLink:(NSString *)url)
+
 RCT_EXTERN_METHOD(reset)
+RCT_EXTERN_METHOD(resetTo:(NSString *)anonymousId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(optOut)
 RCT_EXTERN_METHOD(wipeData)

@@ -245,6 +245,16 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
         Joryio.reset()
     }
 
+    /**
+     * Joryio.resetTo: reset(), then the caller's anonymous id (validated
+     * natively; refused = a plain reset). Resolves true when the id was
+     * adopted, false when it was refused.
+     */
+    @ReactMethod
+    fun resetTo(anonymousId: String?, promise: Promise) {
+        Joryio.resetTo(anonymousId) { adopted -> promise.resolve(adopted) }
+    }
+
     // ─── Tracking consent ──────────────────────────────────────────────────
     //
     // Tracking consent, NOT marketing subscription. optOut stops the SDK
@@ -565,6 +575,18 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getPushPermissionStatus(promise: Promise) {
         promise.resolve(currentPushPermissionStatus())
+    }
+
+    /**
+     * Click-link identity: the URL that opened the app, passed through to the
+     * native SDK unchanged. Native reads `jr_t` and applies the rules
+     * (identified, opted out, consent, once per token). The static call holds
+     * it until initialize() and drops it if tracking is refused first.
+     */
+    @ReactMethod
+    fun identifyFromLink(url: String?) {
+        if (!present("identifyFromLink", "url", url)) return
+        Joryio.identifyFromLink(url)
     }
 
     @ReactMethod

@@ -341,6 +341,12 @@ export interface InAppFormResult {
   message?: string;
   redirect?: string;
   errors?: string[];
+  /**
+   * Why the server refused the form before reading its values, when it did:
+   * 'form_token_invalid' | 'form_token_expired' | 'form_token_required' |
+   * 'form_changed' | 'form_token_used'.
+   */
+  reason?: string;
 }
 
 /**
@@ -368,6 +374,15 @@ function normalizeCapabilities(capabilities?: readonly string[] | null): string[
 function warn(message: string): void {
   // eslint-disable-next-line no-console
   console.warn(`[Joryio] ${message}`);
+}
+
+/** The query parameter a tracked message link carries (click-link identity); the same on every SDK. */
+export const CLICK_IDENTITY_PARAM = 'jr_t';
+
+/** Whether `url` has a `jr_t` query parameter at all (native validates the value). */
+function hasClickIdentityParam(url: string): boolean {
+  const query = url.split('#')[0].split('?').slice(1).join('?');
+  return query.split('&').some((pair) => pair.split('=')[0] === CLICK_IDENTITY_PARAM);
 }
 
 /** A non-empty string, or a warning naming the call and the argument. */
@@ -630,6 +645,22 @@ interface HeldCall {
    * call is judged again without it (see _rejudgeWithoutInitConfig).
    */
   madeInWindow?: PrivacySnapshot;
+  /**
+   * Settles a caller-visible answer when the call is discarded before it
+   * runs (resetTo: `false`), so an app awaiting it never hangs.
+   */
+  onDropped?: () => void;
+}
+
+/** Tell each discarded held call (never throws). */
+function settleDropped(calls: readonly HeldCall[]): void {
+  for (const call of calls) {
+    try {
+      call.onDropped?.();
+    } catch {
+      // A host callback must not break the hold.
+    }
+  }
 }
 
 /** The two privacy switches as decided in this process; null = not decided here. */
@@ -826,6 +857,7 @@ class JoryioSDK {
       }
       if (this._refusedBeforeInit(call.madeUnder) === true) {
         dropped = true;
+        settleDropped([call]);
         continue;
       }
       delete call.madeUnder;
@@ -850,6 +882,7 @@ class JoryioSDK {
         const refused = this._refusedBeforeInit(at);
         if (refused === true) {
           dropped = true;
+          settleDropped([call]);
           continue;
         }
         if (refused === 'unknown') call.madeUnder = at;
@@ -946,7 +979,7 @@ class JoryioSDK {
    *  - defer until initialize() resolves so we never hit native before init,
    *  - swallow (and warn) native errors so a bad call can't crash the host app.
    */
-  private _dispatch(fn: () => void, kind: CallKind = 'control', tag?: HeldCall['tag']): void {
+  private _dispatch(fn: () => void, kind: CallKind = 'control', tag?: HeldCall['tag'], onDropped?: () => void): void {
     if (!isModuleAvailable) return;
     if (this._initialized) {
       this._invoke(fn);
@@ -1001,6 +1034,7 @@ class JoryioSDK {
     }
     const call: HeldCall = { fn, kind };
     if (tag) call.tag = tag;
+    if (onDropped) call.onDropped = onDropped;
     if (madeUnder) call.madeUnder = madeUnder;
     if (madeInWindow) call.madeInWindow = madeInWindow;
     this._pending.push(call);
@@ -1017,11 +1051,12 @@ class JoryioSDK {
     for (const kind of EVICTION_ORDER) {
       const i = this._pending.findIndex((call) => call.kind === kind);
       if (i >= 0) {
-        this._pending.splice(i, 1);
+        settleDropped(this._pending.splice(i, 1));
         return;
       }
     }
-    this._pending.shift();
+    const first = this._pending.shift();
+    if (first) settleDropped([first]);
   }
 
   /**
@@ -1115,6 +1150,7 @@ class JoryioSDK {
 
   /** Drop the held calls of these kinds; keep the rest, in order. */
   private _discardHeld(kinds: readonly CallKind[]): void {
+    settleDropped(this._pending.filter((call) => kinds.includes(call.kind)));
     this._pending = this._pending.filter((call) => !kinds.includes(call.kind));
   }
 
@@ -1369,11 +1405,73 @@ class JoryioSDK {
   }
 
   /**
+   * Recognise the person who clicked a tracked link in a Joryio message.
+   *
+   * Pass the URL that opened the app - `Linking.getInitialURL()` at start
+   * and each `Linking.addEventListener('url', ...)` event. When it carries the
+   * `jr_t` token the click redirect added, this visitor is attached to the
+   * contact the message was sent to. Fire-and-forget; a URL without `jr_t`
+   * does nothing.
+   *
+   * Nothing happens when the person is already identified, has opted out or
+   * consent is denied; while consent is pending the token is held in memory
+   * and sent once consent is granted. The same token is sent once per launch.
+   *
+   * @example
+   * ```ts
+   * Linking.getInitialURL().then((url) => url && Joryio.identifyFromLink(url));
+   * Linking.addEventListener('url', ({ url }) => Joryio.identifyFromLink(url));
+   * ```
+   */
+  identifyFromLink(url: string): void {
+    if (!requireString('identifyFromLink', 'url', url)) return;
+    // The native SDK validates the token; this only skips a call that cannot carry one.
+    if (!hasClickIdentityParam(url)) return;
+    this._dispatch(() => JoryioModule.identifyFromLink(url), 'data');
+  }
+
+  /**
    * Reset the user identity. Call this on logout.
    * Clears user ID, starts new anonymous session, clears in-app messages.
    */
   reset(): void {
     this._dispatch(() => JoryioModule.reset(), 'control', 'reset');
+  }
+
+  /**
+   * {@link reset}, then adopt `anonymousId` instead of a new random id - for
+   * an app that keeps its own visitor id, so the SDK and the app stay ONE
+   * visitor after a logout (BACKLOG D366).
+   *
+   * The id must be 8 to 255 letters, digits, `.`, `_`, `:` or `-`, must not
+   * have the shape of a Joryio profile id (24 lowercase hex), must not be
+   * the signed-in user id, and must not be the anonymous id held while a user
+   * is signed in (that id is tied to their profile); the native SDK checks
+   * it, and a refused id is a plain {@link reset} (a random id), so a logout
+   * is never skipped. Held until initialize() like reset().
+   *
+   * Resolves `true` when the id was adopted, `false` when it was refused or
+   * the native module is unavailable. It resolves when the call runs - for a
+   * call held before initialize(), after it; a held call discarded before
+   * then (pushed out of a full hold) resolves `false`.
+   */
+  resetTo(anonymousId: string): Promise<boolean> {
+    if (!isModuleAvailable) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      // A held call discarded before it runs resolves false (resolve() is once-only).
+      const dropped = () => resolve(false);
+      const answer = (call: () => unknown) => {
+        try {
+          Promise.resolve(call()).then(
+            (adopted: unknown) => resolve(adopted === true),
+            () => resolve(false),
+          );
+        } catch {
+          resolve(false);
+        }
+      };
+      this._dispatch(() => answer(() => JoryioModule.resetTo(anonymousId)), 'control', 'reset', dropped);
+    });
   }
 
   // ─── Tracking consent ────────────────────────────────────────────────────

@@ -452,6 +452,17 @@ describe('null and undefined from host code (contract item 19)', () => {
     expect(native.submitInAppForm.mock.calls).toEqual([['c1', {}]]);
   });
 
+  it('submitInAppForm hands native only the campaign id - the native SDK adds the form token it was served - and passes a refusal reason through (D371 item 4)', async () => {
+    // Android answers a JSON string, iOS an object.
+    const refused = { ok: false, reason: 'form_token_expired', message: 'This form has expired. Please close the message and open it again.' };
+    const native = makeNative({ submitInAppForm: jest.fn().mockResolvedValueOnce(JSON.stringify(refused)).mockResolvedValueOnce(refused) });
+    const { default: Joryio } = loadSdk(native);
+    await Joryio.initialize('key', 'host');
+    await expect(Joryio.submitInAppForm('c1', { email: 'a@b.co' })).resolves.toEqual(refused);
+    await expect(Joryio.submitInAppForm('c1', { email: 'a@b.co' })).resolves.toEqual(refused);
+    expect(native.submitInAppForm.mock.calls).toEqual([['c1', { email: 'a@b.co' }], ['c1', { email: 'a@b.co' }]]);
+  });
+
   it('a null callback subscribes nothing and returns a callable unsubscribe', async () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);

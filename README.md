@@ -302,6 +302,21 @@ Joryio.removeFromSubscriptionGroup('list_abc123', 'email');
 
 Channels: `email`, `sms`, `whatsapp`, `push`, `viber`. Statuses: `optedIn`, `subscribed`, `unsubscribed`.
 
+## Recognise people who click your messages
+
+A tracked link in a Joryio message carries a `jr_t` token. When that link opens your app (a universal link, App Link or deep link), pass the URL to the SDK and the visits and events from this device are attributed to the contact the message was sent to (attribution only - nothing is written to that contact's profile, and the device is not signed in as them):
+
+```ts
+import { Linking } from 'react-native';
+
+Linking.getInitialURL().then((url) => {
+  if (url) Joryio.identifyFromLink(url);
+});
+Linking.addEventListener('url', ({ url }) => Joryio.identifyFromLink(url));
+```
+
+A URL without `jr_t` does nothing, so you can pass every URL your app opens, and it is safe before `initialize()`. The SDK acts only when tracking is allowed and nobody is identified on the device: a signed-in user is never re-attached by a link, an opt-out or a denied consent drops the token, and while consent is pending the token is kept in memory and sent once consent is granted. It is never stored on the device.
+
 ## Privacy controls
 
 Two separate switches decide whether the SDK collects anything, and any "no" wins:

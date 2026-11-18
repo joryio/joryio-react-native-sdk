@@ -317,8 +317,23 @@ class JoryioModule: RCTEventEmitter {
     Joryio.shared.addAlias(aliasLabel, name: aliasName)
   }
 
+  /// Click-link identity: the URL that opened the app, passed through to the
+  /// native SDK unchanged. Native reads `jr_t` and applies the rules
+  /// (identified, opted out, consent, once per token).
+  @objc func identifyFromLink(_ url: String?) {
+    guard present("identifyFromLink", "url", url), let url, let parsed = URL(string: url) else { return }
+    Joryio.shared.identifyFromLink(parsed)
+  }
+
   @objc func reset() {
     Joryio.shared.reset()
+  }
+
+  /// Joryio.resetTo: reset(), then the caller's anonymous id (validated
+  /// natively; a missing or refused id is a plain reset()). Resolves true
+  /// when the id was adopted, false when it was refused.
+  @objc func resetTo(_ anonymousId: String?, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    Joryio.shared.resetTo(anonymousId ?? "") { adopted in resolve(adopted) }
   }
 
   // MARK: - Tracking consent
@@ -895,6 +910,7 @@ class JoryioModule: RCTEventEmitter {
       if let m = r.message { out["message"] = m }
       if let u = r.redirect { out["redirect"] = u }
       if let e = r.errors { out["errors"] = e }
+      if let why = r.reason { out["reason"] = why }
       resolve(out)
     }
   }
