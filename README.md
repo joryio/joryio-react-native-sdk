@@ -60,6 +60,18 @@ Upgrading from a version that used the `Joryio/UI` pod: if you added a `pod 'Jor
 
 Nothing to add. The bridge depends on `io.joryio:joryio-android-ui` from Maven Central, at the same version as this package; React Native projects already list `mavenCentral()` in their repositories.
 
+A **beta** (`npm install @joryio/react-native-sdk@beta`) asks for the Android SDK beta, which is not on Maven Central: download `joryio-android-<version>-maven-repo.zip` from the matching [joryio-android-sdk pre-release](https://github.com/joryio/joryio-android-sdk/releases), unzip it into a folder of its own (the zip has no top-level folder: `unzip joryio-android-<version>-maven-repo.zip -d joryio-android-<version>-maven-repo`), and add that folder by absolute path to the project-level `android/build.gradle`:
+
+```groovy
+allprojects {
+    repositories {
+        maven { url = uri("/absolute/path/to/joryio-android-<version>-maven-repo") }
+    }
+}
+```
+
+Remove the line when you move to the final release. Full steps, including Expo: [Installing a beta](https://docs.joryio.com/developers/sdk/react-native-sdk#beta).
+
 ### Expo
 
 The SDK is a native module, so it does not run in Expo Go. Use a development build (`npx expo prebuild` or EAS Build) on Expo SDK 52 or newer. Expo's default iOS deployment target can be lower than the 14.0 the SDK needs; raise it with `expo-build-properties` in `app.json`:

@@ -1409,8 +1409,10 @@ class JoryioSDK {
    *
    * Pass the URL that opened the app - `Linking.getInitialURL()` at start
    * and each `Linking.addEventListener('url', ...)` event. When it carries the
-   * `jr_t` token the click redirect added, this visitor is attached to the
-   * contact the message was sent to. Fire-and-forget; a URL without `jr_t`
+   * `jr_t` token the click redirect added, this app's events are attributed
+   * to the contact the message was sent to. Attribution only: the person is
+   * not identified and this profile is never merged into the contact (only
+   * `identify()` does that). Fire-and-forget; a URL without `jr_t`
    * does nothing.
    *
    * Nothing happens when the person is already identified, has opted out or
