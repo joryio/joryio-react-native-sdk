@@ -1,6 +1,6 @@
 {
   "name": "@joryio/react-native-sdk",
-  "version": "1.4.0-beta.2",
+  "version": "1.4.0-beta.4",
   "description": "Joryio SDK for React Native - bridges native iOS and Android SDKs",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -58,6 +58,7 @@
     "@typescript-eslint/parser": "^6.21.0",
     "eslint": "^8.57.1",
     "jest": "^29.7.0",
+    "react": "18.3.1",
     "ts-jest": "^29.1.0",
     "typescript": "^5.0.0"
   },

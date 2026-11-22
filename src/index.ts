@@ -1,6 +1,18 @@
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import * as ReactNative from 'react-native';
+import * as React from 'react';
 
 const { JoryioModule } = NativeModules;
+
+/**
+ * This package's version - the same number every Joryio SDK carries
+ * (sdk-version-parity.spec.ts pins it; the release tooling rewrites it).
+ * Handed to the native SDK at initialize() as `sdkWrapperVersion`, which
+ * sends it on every request as `X-Joryio-SDK-Wrapper-Version` next to
+ * `X-Joryio-SDK-Wrapper: react-native` (D427), so the dashboard shows the
+ * version of THIS package, the one the app upgrades.
+ */
+export const SDK_VERSION = '1.4.0';
 
 /**
  * Mirrors the backend's SUBSCRIPTION_CHANNELS and the web SDK. Five, including
@@ -137,6 +149,19 @@ export interface JoryioConfig {
    * Same option, same name, on iOS, Android and Unity.
    */
   holdInAppMessagesForHandler?: boolean;
+
+  /**
+   * iOS only (default false): an https link from Joryio content - an in-app
+   * message, a placement, a card, a push - whose host is one of your app's
+   * associated domains (`applinks:` entries, `*.shop.com` included) goes to
+   * your app's own universal-link handling (`scene(_:continue:)` /
+   * `application(_:continue:restorationHandler:)`) instead of Safari. With
+   * React Native that usually means the `Linking` 'url' event. Ignored on
+   * Android, which routes verified App Links to the app itself. A handler set
+   * with {@link JoryioSDK.setLinkHandler} runs first. Same option on iOS
+   * (`JoryioConfig.forwardUniversalLinks`) and Unity.
+   */
+  forwardUniversalLinks?: boolean;
 
   /**
    * Tracking consent at start-up. Same option and values as the web, iOS,
@@ -545,6 +570,13 @@ function finiteProperties(caller: string, properties: Record<string, unknown>): 
  * expect - was a fatal JS error in a release build and skipped every other
  * listener of the same event. A returned promise that rejects is caught too.
  */
+/** A flag key must be a non-empty string; otherwise the getter answers its default. */
+function flagKeyOk(method: string, key: unknown): key is string {
+  if (typeof key === 'string' && key.length > 0) return true;
+  warn(`${method}() needs a flag key; the default is returned.`);
+  return false;
+}
+
 function guardedCallback<T>(name: string, callback: (event: T) => unknown): (event: T) => void {
   const report = (err: unknown) => {
     // eslint-disable-next-line no-console
@@ -603,6 +635,397 @@ export const MAX_PRE_INIT_CALLS = 1000;
  * apply the same rule - see {@link Joryio.trackInAppImpression}.
  */
 export const IN_APP_DISPLAY_DWELL_MS = 1000;
+
+// ── Placements (docs/PLACEMENTS_PLAN.md, D444) ──────────────────────────────
+
+/** Share of an item that must be on screen for it to count as seen - the same on every Joryio SDK. */
+export const PLACEMENT_VIEWABLE_FRACTION = 0.5;
+/** A placement key is fetched from the network at most once per this many seconds - the same on every Joryio SDK. */
+export const PLACEMENT_MIN_REFRESH_SECONDS = 30;
+
+/**
+ * A drawn product card's tap is reported as `clicked` with the elementId
+ * `product:<product id>` (at most 128 characters) - the same on every Joryio SDK.
+ */
+export const PLACEMENT_PRODUCT_ELEMENT_PREFIX = 'product:';
+/** Width of a drawn product card when the app does not set one (dp / points) - the same on every Joryio SDK. */
+export const PLACEMENT_PRODUCT_CARD_WIDTH = 160;
+/** The elementId a product card's click is reported with - use it with `markClicked` when you draw the cards yourself. */
+export function placementProductElementId(productId: string): string {
+  return `${PLACEMENT_PRODUCT_ELEMENT_PREFIX}${productId}`.slice(0, 128);
+}
+
+export type PlacementEmptyBehavior = 'collapse' | 'keep_space';
+
+export interface PlacementContent {
+  kind: 'native' | 'html';
+  title?: string;
+  body?: string;
+  imageUrl?: string;
+  buttons?: Array<{ id: string; text: string; action: string; url?: string }>;
+  closeButton?: boolean;
+  html?: string;
+  css?: string;
+}
+
+/** A product card of a recommendation placement item (D444 Phase 2b). Same names on all five SDKs. */
+export interface PlacementProduct {
+  id: string;
+  title: string | null;
+  price: string | null;
+  compareAtPrice: string | null;
+  discountPercent: number | null;
+  imageUrl: string | null;
+  url: string | null;
+}
+
+/** An item to draw, with the calls that report what the person did with it. */
+export interface PlacementItem {
+  id: string;
+  variantId?: string | null;
+  kind: 'native' | 'html' | 'data';
+  data: Record<string, string | number | boolean | null>;
+  content?: PlacementContent | null;
+  /** Products picked for the person by a recommendation model; [] when the item has none. Draw them as cards. */
+  products: PlacementProduct[];
+  /** A viewable impression (your UI drew it): once at least half of it was on screen for IN_APP_DISPLAY_DWELL_MS. */
+  markDisplayed(): void;
+  markClicked(elementId?: string): void;
+  markDismissed(): void;
+}
+
+export interface Placement {
+  placementKey: string;
+  items: PlacementItem[];
+  isControl: boolean;
+  emptyBehavior: PlacementEmptyBehavior;
+  maxItems: number;
+  ttlSeconds: number;
+  /** For a held-out person (`isControl`): the empty spot was on screen. */
+  markDisplayed(): void;
+}
+
+/** The bridge's product cards, defensively typed: an entry without an id is dropped. */
+function toProducts(raw: unknown): PlacementProduct[] {
+  if (!Array.isArray(raw)) return [];
+  const str = (v: unknown) => (typeof v === 'string' ? v : null);
+  return raw
+    .filter((p: any) => p && typeof p === 'object' && (typeof p.id === 'string' || typeof p.id === 'number'))
+    .map((p: any) => ({
+      id: String(p.id),
+      title: str(p.title),
+      price: str(p.price),
+      compareAtPrice: str(p.compareAtPrice),
+      discountPercent: typeof p.discountPercent === 'number' ? p.discountPercent : null,
+      imageUrl: str(p.imageUrl),
+      url: str(p.url),
+    }));
+}
+
+/** Native JSON (Placement.toJson on iOS / Android) -> objects whose mark* calls go back to native. */
+function toPlacements(json: unknown): Record<string, Placement> {
+  let raw: Record<string, any> = {};
+  try {
+    raw = typeof json === 'string' ? JSON.parse(json) : (json as Record<string, any>) || {};
+  } catch {
+    raw = {};
+  }
+  const mark = (key: string, itemId: string | null, action: string, elementId?: string) => {
+    JoryioModule?.markPlacement?.(key, itemId, action, elementId ?? null);
+  };
+  const out: Record<string, Placement> = {};
+  for (const [key, p] of Object.entries(raw || {})) {
+    if (!p || typeof p !== 'object') continue;
+    out[key] = {
+      placementKey: p.placementKey || key,
+      isControl: p.isControl === true,
+      emptyBehavior: p.emptyBehavior === 'keep_space' ? 'keep_space' : 'collapse',
+      maxItems: typeof p.maxItems === 'number' ? p.maxItems : 1,
+      ttlSeconds: typeof p.ttlSeconds === 'number' ? p.ttlSeconds : 300,
+      items: (Array.isArray(p.items) ? p.items : []).map((i: any) => ({
+        id: String(i.id),
+        variantId: i.variantId ?? null,
+        kind: i.kind,
+        data: i.data || {},
+        content: i.content ?? null,
+        products: toProducts(i.products),
+        markDisplayed: () => mark(key, String(i.id), 'displayed'),
+        markClicked: (elementId?: string) => mark(key, String(i.id), 'clicked', elementId),
+        markDismissed: () => mark(key, String(i.id), 'dismissed'),
+      })),
+      markDisplayed: () => mark(key, null, 'control'),
+    };
+  }
+  return out;
+}
+
+export interface JoryioPlacementProps {
+  placementKey: string;
+  style?: unknown;
+  /** After each draw: what was drawn and its height (0 when collapsed). */
+  onRender?: (info: { placementKey: string; itemCount: number; isControl: boolean; emptyBehavior: PlacementEmptyBehavior; height: number }) => void;
+  /**
+   * A `deep_link` button with an app link (`myapp://cart`) was tapped: route
+   * it. An http(s) link is opened by the native SDK instead, and any other
+   * scheme (javascript:, data:, intent:, ...) is refused - see isAppDeepLink.
+   * A handler set with setLinkHandler sees every link first; this one is
+   * called when it declines.
+   */
+  onDeepLink?: (url: string) => void;
+  /**
+   * Draw an item's recommended products as a horizontal row of product cards
+   * (image, title, price, optional button) - the native view does it. Default true.
+   */
+  showProducts?: boolean;
+  /** Label of a button on every product card; unset = no button (the whole card opens the product). */
+  productButtonText?: string;
+  /** Width of one product card in dp / points (default PLACEMENT_PRODUCT_CARD_WIDTH). */
+  productCardWidth?: number;
+}
+
+/** Schemes never opened nor handed to the app, whatever a link says (the backend's placement / card link rule). */
+const REFUSED_LINK_SCHEMES = ['javascript', 'data', 'file', 'vbscript', 'blob', 'about', 'content', 'intent'];
+
+/**
+ * An app deep link (`myapp://cart`) that may go to the app's own handler: a
+ * `scheme://` link whose scheme is not http(s) and not a refused one. The
+ * native PlacementView applies the same rule before a link reaches JS; this
+ * layer checks again. The same rule on every Joryio SDK.
+ */
+export function isAppDeepLink(url: unknown): boolean {
+  if (typeof url !== 'string') return false;
+  const m = /^([a-z][a-z0-9+.-]*):\/\/./i.exec(url.trim());
+  if (!m) return false;
+  const scheme = m[1].toLowerCase();
+  return scheme !== 'http' && scheme !== 'https' && !REFUSED_LINK_SCHEMES.includes(scheme);
+}
+
+/**
+ * Where a link the SDK is about to open came from. The same wire values on
+ * every Joryio SDK. `push` comes from iOS only: on Android the native SDK
+ * never opens a push link itself - your launcher activity receives it.
+ */
+export type JoryioLinkSource = 'in_app' | 'placement' | 'card' | 'push';
+
+/** A link the native SDK is about to open, handed to {@link JoryioSDK.setLinkHandler} first. */
+export interface JoryioLink {
+  /** An http(s) link or an app deep link (`myapp://cart`); a push link may be another scheme the system opens. */
+  url: string;
+  source: JoryioLinkSource;
+  campaignId?: string;
+  placementKey?: string;
+  itemId?: string;
+  cardId?: string;
+  /** True for an app-scheme link, false for http(s). */
+  isAppDeepLink: boolean;
+}
+
+/**
+ * Return true (or a Promise of true) to take the link over, false to let the
+ * native SDK open it as it does without a handler. A Promise is how to decide
+ * later: the link waits for it.
+ */
+export type JoryioLinkHandler = (link: JoryioLink) => boolean | Promise<boolean>;
+
+const LINK_SOURCES: readonly JoryioLinkSource[] = ['in_app', 'placement', 'card', 'push'];
+
+/** The `JoryioLink` event body as a JoryioLink, or null when it is not one. */
+function toLink(e: any): JoryioLink | null {
+  if (!e || typeof e.url !== 'string' || !LINK_SOURCES.includes(e.source)) return null;
+  const link: JoryioLink = { url: e.url, source: e.source, isAppDeepLink: e.isAppDeepLink === true };
+  for (const key of ['campaignId', 'placementKey', 'itemId', 'cardId'] as const) {
+    if (typeof e[key] === 'string' && e[key]) link[key] = e[key];
+  }
+  return link;
+}
+
+let nativePlacementView: any = null;
+
+/**
+ * `<JoryioPlacement placementKey="home_hero" />` - the native SDK's own
+ * PlacementView (iOS and Android): fetching, caching, viewability, the
+ * holdout and the reports are the native ones. The component sizes itself to
+ * the drawn content (0 when the placement collapses); a `style` height wins.
+ */
+export function JoryioPlacement(props: JoryioPlacementProps): any {
+  const [height, setHeight] = React.useState(0);
+  if (!nativePlacementView) {
+    const requireNative = (ReactNative as any).requireNativeComponent;
+    if (typeof requireNative !== 'function') return null;
+    nativePlacementView = requireNative('JoryioPlacementView');
+  }
+  return React.createElement(nativePlacementView, {
+    placementKey: props.placementKey,
+    // Passed to the native PlacementView's properties of the same names.
+    showProducts: props.showProducts !== false,
+    productButtonText: typeof props.productButtonText === 'string' ? props.productButtonText : null,
+    productCardWidth:
+      typeof props.productCardWidth === 'number' && Number.isFinite(props.productCardWidth) && props.productCardWidth > 0
+        ? props.productCardWidth
+        : PLACEMENT_PRODUCT_CARD_WIDTH,
+    style: [{ height }, props.style],
+    onPlacementRender: (e: any) => {
+      const info = e?.nativeEvent || {};
+      setHeight(typeof info.height === 'number' ? info.height : 0);
+      props.onRender?.(info);
+    },
+    onPlacementDeepLink: (e: any) => {
+      const url = e?.nativeEvent?.url;
+      if (isAppDeepLink(url)) props.onDeepLink?.(url);
+    },
+  });
+}
+
+// ── Content cards (docs/PLACEMENTS_PLAN.md section 11, D444 Phase 3) ────────
+
+/** The feed goes to the network at most once per this many seconds; extra calls coalesce - the same on every Joryio SDK. */
+export const CARD_MIN_REFRESH_SECONDS = 30;
+/** How long the feed is served from the device cache before it is asked for again - the same on every Joryio SDK. */
+export const CARD_FEED_TTL_SECONDS = 300;
+
+/**
+ * `server`: read / clicked / dismissed are kept per person on the server, the
+ * same on every device. `device`: an anonymous visitor - this device keeps
+ * what was read and dismissed (the native SDK does it).
+ */
+export type CardStateScope = 'server' | 'device';
+
+/** One card of the person's feed. */
+export interface Card {
+  /** Stable id of this card for this person. */
+  id: string;
+  /** Campaign id, or `journey:<canvasId>:<nodeId>` for a journey card. */
+  campaignId: string;
+  variantId: string | null;
+  title: string | null;
+  body: string | null;
+  imageUrl: string | null;
+  /** Button label; null = no button (the whole card opens `url` when set). */
+  buttonText: string | null;
+  /** An http(s) URL or the app's own deep link; null = nothing to open. */
+  url: string | null;
+  pinned: boolean;
+  /** ISO 8601. */
+  createdAt: string;
+  /** ISO 8601, or null. */
+  expiresAt: string | null;
+  read: boolean;
+  clicked: boolean;
+}
+
+/** The person's feed (or one page of it). */
+export interface CardFeed {
+  /** Pinned first, then newest first. */
+  cards: Card[];
+  /** Unread cards across the whole feed, not this page: the badge. */
+  unreadCount: number;
+  /** Pass to `getCards({ cursor })` for the next page; null on the last one. */
+  nextCursor: string | null;
+  stateScope: CardStateScope;
+}
+
+const EMPTY_CARD_FEED_JSON = '{"cards":[],"unreadCount":0,"nextCursor":null,"stateScope":"server"}';
+
+const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+/** Native JSON (CardFeed.toJson on iOS / Android) -> a CardFeed. A bad answer is the empty feed. */
+function toCardFeed(json: unknown): CardFeed {
+  let raw: any = null;
+  try {
+    raw = typeof json === 'string' ? JSON.parse(json) : json;
+  } catch {
+    raw = null;
+  }
+  if (!raw || typeof raw !== 'object') raw = {};
+  const cards: Card[] = (Array.isArray(raw.cards) ? raw.cards : [])
+    .filter((c: any) => c && typeof c === 'object' && typeof c.id === 'string')
+    .map((c: any) => ({
+      id: c.id,
+      campaignId: str(c.campaignId) ?? '',
+      variantId: str(c.variantId),
+      title: str(c.title),
+      body: str(c.body),
+      imageUrl: str(c.imageUrl),
+      buttonText: str(c.buttonText),
+      url: str(c.url),
+      pinned: c.pinned === true,
+      createdAt: str(c.createdAt) ?? '',
+      expiresAt: str(c.expiresAt),
+      read: c.read === true,
+      clicked: c.clicked === true,
+    }));
+  return {
+    cards,
+    unreadCount: typeof raw.unreadCount === 'number' && raw.unreadCount >= 0 ? raw.unreadCount : 0,
+    nextCursor: str(raw.nextCursor),
+    stateScope: raw.stateScope === 'device' ? 'device' : 'server',
+  };
+}
+
+/** A card or its id. */
+const cardIdOf = (card: Card | string): string | null => {
+  const id = typeof card === 'string' ? card : card && typeof card === 'object' ? card.id : null;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+};
+
+export interface JoryioCardFeedProps {
+  /** Give it a size (e.g. `{ flex: 1 }`, the default): the feed scrolls inside it. */
+  style?: unknown;
+  /** Shown when the feed is empty. Default "No messages yet". */
+  emptyText?: string;
+  /** The marker on a pinned card. Default "Pinned". */
+  pinnedLabel?: string;
+  /** The accessible label of the dismiss control. Default "Dismiss". */
+  dismissLabel?: string;
+  /** The accessible label of the unread dot. Default "Unread". */
+  unreadLabel?: string;
+  /**
+   * A card's url is an app deep link (`myapp://...`): route it in your app
+   * (the click is already reported). Without this only an http(s) link is
+   * opened; no other scheme is ever handed to the system.
+   */
+  onDeepLink?: (url: string, cardId: string) => void;
+  /** After each draw: how many cards were drawn, and the unread count. */
+  onRender?: (info: { cardCount: number; unreadCount: number }) => void;
+}
+
+let nativeCardFeedView: any = null;
+
+/**
+ * `<JoryioCardFeed />` - the person's content cards as a plain scrolling list:
+ * the native SDK's own feed view (iOS CardFeedViewController, Android
+ * CardFeedView), so paging, the unread dot, the dismiss control, the
+ * viewed / read / clicked / dismissed reports (a card at least
+ * PLACEMENT_VIEWABLE_FRACTION on screen for IN_APP_DISPLAY_DWELL_MS is viewed
+ * then read) and the link rule are the native ones. The look follows the
+ * system theme, dark mode included.
+ */
+export function JoryioCardFeed(props: JoryioCardFeedProps): any {
+  if (!nativeCardFeedView) {
+    const requireNative = (ReactNative as any).requireNativeComponent;
+    if (typeof requireNative !== 'function') return null;
+    nativeCardFeedView = requireNative('JoryioCardFeedView');
+  }
+  return React.createElement(nativeCardFeedView, {
+    style: [{ flex: 1 }, props.style],
+    emptyText: props.emptyText,
+    pinnedLabel: props.pinnedLabel,
+    dismissLabel: props.dismissLabel,
+    unreadLabel: props.unreadLabel,
+    onCardFeedRender: (e: any) => {
+      const info = e?.nativeEvent || {};
+      props.onRender?.({
+        cardCount: typeof info.cardCount === 'number' ? info.cardCount : 0,
+        unreadCount: typeof info.unreadCount === 'number' ? info.unreadCount : 0,
+      });
+    },
+    onCardDeepLink: (e: any) => {
+      const url = e?.nativeEvent?.url;
+      const cardId = e?.nativeEvent?.cardId;
+      if (typeof url === 'string') props.onDeepLink?.(url, typeof cardId === 'string' ? cardId : '');
+    },
+  });
+}
 
 /**
  * What a held call is, which decides what a later privacy decision discards
@@ -779,6 +1202,14 @@ class JoryioSDK {
    * decide whether the start-up hold ends with native drawing.
    */
   private _inAppHandedToJs = false;
+
+  private _placementListeners = 0;
+
+  private _cardListeners = 0;
+
+  private _linkHandler: JoryioLinkHandler | null = null;
+
+  private _linkSubscription: { remove: () => void } | null = null;
 
   constructor() {
     this._ready = new Promise<void>((resolve) => {
@@ -1273,6 +1704,8 @@ class JoryioSDK {
       if (forNative.trackingConsent === 'denied') this._initConfigDenied = true;
       if (forNative.optOut === true) this._initConfigOptedOut = true;
     }
+    // The bridge names itself on every request (D427); not an app option.
+    forNative.sdkWrapperVersion = SDK_VERSION;
     try {
       await JoryioModule.initialize(sdkKey, apiHost, forNative);
     } catch (e) {
@@ -2222,6 +2655,293 @@ class JoryioSDK {
    */
   syncInAppCampaigns(): void {
     this._dispatch(() => JoryioModule.syncInAppCampaigns?.());
+  }
+
+  // ─── Feature flags (BACKLOG D446) ───────────────────────────────────────
+  //
+  // The native SDK holds the answer and logs exposures; these route to it.
+  // The getters resolve at once with what the device holds - they never wait
+  // for the network - and with the in-code default before initialize(), for a
+  // flag Joryio did not send, for a value of another type, or without
+  // tracking consent. A Promise because every native call crosses the bridge
+  // asynchronously; the names and the wire are the same on all five SDKs.
+
+  /** A flag's value of any type, or `defaultValue`. The first read in a session logs an exposure. */
+  getFlag<T = unknown>(key: string, defaultValue: T): Promise<T> {
+    if (!flagKeyOk('getFlag', key)) return Promise.resolve(defaultValue);
+    return this._query<{ value: T } | null>('getFlag', null, () => {
+      return JoryioModule.getFlag(key, defaultValue ?? null);
+    }).then(
+      (r) => (r && typeof r === 'object' && 'value' in r ? (r.value as T) : defaultValue),
+    );
+  }
+
+  /** A boolean flag, or `defaultValue` (also for a flag of another type). */
+  getBoolFlag(key: string, defaultValue: boolean): Promise<boolean> {
+    if (!flagKeyOk('getBoolFlag', key)) return Promise.resolve(defaultValue);
+    return this._query('getBoolFlag', defaultValue, () => {
+      return JoryioModule.getBoolFlag(key, !!defaultValue);
+    });
+  }
+
+  /** A string flag, or `defaultValue`. */
+  getStringFlag(key: string, defaultValue: string): Promise<string> {
+    if (!flagKeyOk('getStringFlag', key)) return Promise.resolve(defaultValue);
+    return this._query('getStringFlag', defaultValue, () => {
+      return JoryioModule.getStringFlag(key, String(defaultValue ?? ''));
+    });
+  }
+
+  /** A number flag, or `defaultValue`. */
+  getNumberFlag(key: string, defaultValue: number): Promise<number> {
+    if (!flagKeyOk('getNumberFlag', key)) return Promise.resolve(defaultValue);
+    return this._query('getNumberFlag', defaultValue, () => {
+      return JoryioModule.getNumberFlag(key, Number(defaultValue));
+    });
+  }
+
+  /** A JSON flag (object, array or scalar), or `defaultValue`. */
+  getJsonFlag<T = unknown>(key: string, defaultValue: T): Promise<T> {
+    if (!flagKeyOk('getJsonFlag', key)) return Promise.resolve(defaultValue);
+    return this._query<{ value: T } | null>('getJsonFlag', null, () => {
+      return JoryioModule.getJsonFlag(key, defaultValue ?? null);
+    }).then(
+      (r) => (r && typeof r === 'object' && 'value' in r ? (r.value as T) : defaultValue),
+    );
+  }
+
+  /** Every flag held for this person, key -> value. Logs no exposure. */
+  getAllFlags(): Promise<Record<string, unknown>> {
+    return this._query<Record<string, unknown>>('getAllFlags', {}, () => {
+      return JoryioModule.getAllFlags();
+    });
+  }
+
+  /** Ask the server now; resolves when the answer is in (or the request failed: the held flags stay). */
+  refreshFlags(): Promise<void> {
+    return this._query<void>('refreshFlags', undefined, () => {
+      return JoryioModule.refreshFlags();
+    }).then(() => undefined);
+  }
+
+  /**
+   * `callback(keys)` is called with the keys whose value changed. Returns an
+   * unsubscribe function. Safe before initialize(): updates start once the
+   * SDK runs.
+   */
+  onFlagsUpdated(callback: (keys: string[]) => unknown): () => void {
+    if (typeof callback !== 'function') {
+      warn('onFlagsUpdated() needs a callback function; ignored.');
+      return () => {};
+    }
+    if (!isModuleAvailable || !emitter) return () => {};
+    const guarded = guardedCallback<string[]>('onFlagsUpdated', callback);
+    const subscription = emitter.addListener('JoryioFlagsUpdated', (event: unknown) => {
+      const keys = (event as { keys?: unknown } | null)?.keys;
+      guarded(Array.isArray(keys) ? keys.filter((k): k is string => typeof k === 'string') : []);
+    });
+    // One native subscription for the module, held until initialize() like
+    // any control call; native ignores a second enable.
+    this._dispatch(() => JoryioModule.enableFlagsUpdates?.());
+    return () => subscription.remove();
+  }
+
+  /**
+   * The placements for `placementKeys`, to draw with your own components
+   * (or use `<JoryioPlacement placementKey=... />`). Report with
+   * `item.markDisplayed()` once at least half of it was on screen for
+   * IN_APP_DISPLAY_DWELL_MS, `item.markClicked()`, `item.markDismissed()`,
+   * and `placement.markDisplayed()` for a held-out person's empty spot.
+   * Waits for initialize(); resolves `{}` without the native module.
+   */
+  getPlacements(placementKeys: string[]): Promise<Record<string, Placement>> {
+    const keys = Array.isArray(placementKeys) ? placementKeys.filter((k) => typeof k === 'string') : [];
+    // A read: waits for initialize() like the other queries.
+    return this._query<string>('getPlacements', '{}', () => {
+      return JoryioModule.getPlacements(keys);
+    }).then(toPlacements);
+  }
+
+  /** Ask the server again (all placements on screen when no keys). At most once per key per PLACEMENT_MIN_REFRESH_SECONDS. */
+  refreshPlacements(placementKeys?: string[]): void {
+    this._dispatch(() => JoryioModule.refreshPlacements?.(Array.isArray(placementKeys) ? placementKeys : null));
+  }
+
+  /**
+   * Called with the placements whose content changed. Returns an unsubscribe.
+   * An app with its own push messaging handler should call
+   * refreshPlacements() on a `jry_sync: "placements"` data message; the
+   * native SDKs handle it themselves otherwise.
+   */
+  onPlacementsUpdated(callback: (placements: Record<string, Placement>) => unknown): () => void {
+    if (typeof callback !== 'function' || !isModuleAvailable || !emitter) return () => {};
+    const subscription = emitter.addListener('JoryioPlacementsUpdated', (e: any) => {
+      try {
+        callback(toPlacements(e?.json));
+      } catch (error) {
+        warn(`onPlacementsUpdated callback threw: ${String(error)}`);
+      }
+    });
+    this._placementListeners += 1;
+    this._dispatch(() => JoryioModule.enablePlacementsUpdates?.());
+    let removed = false;
+    return () => {
+      if (removed) return;
+      removed = true;
+      subscription.remove();
+      this._placementListeners = Math.max(0, this._placementListeners - 1);
+      if (this._placementListeners === 0) this._dispatch(() => JoryioModule.disablePlacementsUpdates?.());
+    };
+  }
+
+  /**
+   * The person's content cards - pinned first, newest first - with the unread
+   * count for a badge, from the native SDK's cache for CARD_FEED_TTL_SECONDS.
+   * Pass a feed's `nextCursor` as `{ cursor }` for the next page (the native
+   * SDK adds it to the cached feed). Draw it with `<JoryioCardFeed />`, or
+   * yourself and report with markCardViewed / markCardRead /
+   * markCardClicked / dismissCard. Waits for initialize(); resolves the empty
+   * feed without the native module.
+   */
+  getCards(options?: { cursor?: string | null }): Promise<CardFeed> {
+    const cursor = typeof options?.cursor === 'string' && options.cursor.length > 0 ? options.cursor : null;
+    // A read: waits for initialize() like the other queries.
+    return this._query<string>('getCards', EMPTY_CARD_FEED_JSON, () => {
+      return JoryioModule.getCards(cursor);
+    }).then(toCardFeed);
+  }
+
+  /**
+   * Unread cards, from the native SDK's cache (never a network call): the
+   * badge. A Promise here because every React Native read crosses the bridge;
+   * the native SDKs answer synchronously.
+   */
+  getUnreadCardCount(): Promise<number> {
+    return this._query<number>('getUnreadCardCount', 0, () => {
+      return JoryioModule.getUnreadCardCount();
+    }).then((n) => (typeof n === 'number' && n >= 0 ? n : 0));
+  }
+
+  /** The card was on screen (`viewed`). Once per card; `<JoryioCardFeed />` does it itself. */
+  markCardViewed(card: Card | string): void {
+    const id = cardIdOf(card);
+    if (id) this._dispatch(() => JoryioModule.markCardViewed?.(id), 'data');
+  }
+
+  /** The person read the card (`read`): it stops counting as unread at once. */
+  markCardRead(card: Card | string): void {
+    const id = cardIdOf(card);
+    if (id) this._dispatch(() => JoryioModule.markCardRead?.(id), 'data');
+  }
+
+  /** The person tapped the card or its button (`clicked`, which also marks it read). Open its url yourself. */
+  markCardClicked(card: Card | string): void {
+    const id = cardIdOf(card);
+    if (id) this._dispatch(() => JoryioModule.markCardClicked?.(id), 'data');
+  }
+
+  /** The person removed the card (`dismissed`): it leaves the feed at once and never comes back. */
+  dismissCard(card: Card | string): void {
+    const id = cardIdOf(card);
+    if (id) this._dispatch(() => JoryioModule.dismissCard?.(id), 'data');
+  }
+
+  /**
+   * Ask the server for the feed again. At most once per
+   * CARD_MIN_REFRESH_SECONDS; extra calls coalesce. An app with its own push
+   * messaging handler calls this on a `jry_sync: "cards"` data message; the
+   * native SDKs handle it themselves otherwise.
+   */
+  refreshCards(): void {
+    this._dispatch(() => JoryioModule.refreshCards?.());
+  }
+
+  /** Called with the whole feed whenever it changes (a refresh, a report, an identity change). Returns an unsubscribe. */
+  onCardsUpdated(callback: (feed: CardFeed) => unknown): () => void {
+    if (typeof callback !== 'function' || !isModuleAvailable || !emitter) return () => {};
+    const subscription = emitter.addListener('JoryioCardsUpdated', (e: any) => {
+      try {
+        callback(toCardFeed(e?.json));
+      } catch (error) {
+        warn(`onCardsUpdated callback threw: ${String(error)}`);
+      }
+    });
+    this._cardListeners += 1;
+    this._dispatch(() => JoryioModule.enableCardsUpdates?.());
+    let removed = false;
+    return () => {
+      if (removed) return;
+      removed = true;
+      subscription.remove();
+      this._cardListeners = Math.max(0, this._cardListeners - 1);
+      if (this._cardListeners === 0) this._dispatch(() => JoryioModule.disableCardsUpdates?.());
+    };
+  }
+
+  /**
+   * Receive EVERY link the native SDK is about to open - an in-app message
+   * button or link, a `<JoryioPlacement />` button, a `<JoryioCardFeed />`
+   * tap, an iOS push tap - before it opens: http(s) links and app deep links
+   * (`myapp://cart`) alike, with where it came from (`link.source`) and the
+   * ids that go with it. Return true to take the link over (navigate in your
+   * app), false to let the native SDK open it as it does without a handler -
+   * http(s) to the system (or your universal-link handling with
+   * `forwardUniversalLinks` on iOS), an app deep link to the component's
+   * `onDeepLink`. A Promise decides later. A refused scheme (javascript:,
+   * data:, intent:, ...) never reaches it. One handler: a second call
+   * replaces the first. Works before initialize(). Same name on iOS,
+   * Android, web and Unity (`SetLinkHandler`).
+   */
+  setLinkHandler(handler: JoryioLinkHandler): void {
+    if (typeof handler !== 'function') {
+      warn('setLinkHandler() needs a function; use clearLinkHandler() to remove one');
+      return;
+    }
+    this._linkHandler = handler;
+    if (!isModuleAvailable || !emitter) return;
+    if (!this._linkSubscription) {
+      this._linkSubscription = emitter.addListener('JoryioLink', (e: any) => this._onLink(e));
+    }
+    // Not held for initialize(): the native handler is app-wide and works before it.
+    JoryioModule.enableLinkHandler?.();
+  }
+
+  /** Remove the handler set with setLinkHandler: links open as they do without one. */
+  clearLinkHandler(): void {
+    this._linkHandler = null;
+    this._linkSubscription?.remove();
+    this._linkSubscription = null;
+    if (isModuleAvailable) JoryioModule.disableLinkHandler?.();
+  }
+
+  /** A link from native: ask the handler, then tell native whether it was taken. */
+  private _onLink(e: any): void {
+    const linkId = e?.linkId;
+    if (typeof linkId !== 'string') return;
+    const complete = (handled: unknown) => JoryioModule.completeLink?.(linkId, handled === true);
+    const handler = this._linkHandler;
+    const link = toLink(e);
+    if (!handler || !link) {
+      complete(false);
+      return;
+    }
+    let result: boolean | Promise<boolean>;
+    try {
+      result = handler(link);
+    } catch (error) {
+      // A throwing handler declines: the link still opens.
+      warn(`setLinkHandler handler threw; the link opens as without one: ${String(error)}`);
+      complete(false);
+      return;
+    }
+    if (result && typeof (result as Promise<boolean>).then === 'function') {
+      (result as Promise<boolean>).then(complete, (error) => {
+        warn(`setLinkHandler handler rejected; the link opens as without one: ${String(error)}`);
+        complete(false);
+      });
+    } else {
+      complete(result);
+    }
   }
 
   /**

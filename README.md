@@ -168,6 +168,7 @@ All options are optional:
 | `trackingConsent` | `'granted' \| 'denied' \| 'pending'` | unset | Consent at startup. Leave it unset unless your consent banner has an answer - see [Privacy controls](#privacy-controls) |
 | `optOut` | `boolean` | `false` | Start opted out of tracking |
 | `notificationChannelName` | `string` | `"Notifications"` | Android only: the notification channel name people see in system settings (Android 8+). Pass it localized. Ignored on iOS |
+| `forwardUniversalLinks` | `boolean` | `false` | iOS only: an https link from Joryio content on one of your associated domains goes to your app's own universal-link handling instead of Safari. Ignored on Android |
 
 ## Push notifications
 

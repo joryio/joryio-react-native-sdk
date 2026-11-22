@@ -166,6 +166,7 @@ describe('tracking consent', () => {
       trackingConsent: 'pending',
       optOut: true,
       holdInAppMessagesForHandler: true,
+      sdkWrapperVersion: expect.any(String),
     });
   });
 
@@ -186,12 +187,12 @@ describe('tracking consent', () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('key', 'host', { trackingConsent: 'Denied' as 'denied' });
-    expect(native.initialize).toHaveBeenLastCalledWith('key', 'host', { trackingConsent: 'denied', holdInAppMessagesForHandler: true });
+    expect(native.initialize).toHaveBeenLastCalledWith('key', 'host', { trackingConsent: 'denied', holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
 
     const other = makeNative();
     const { default: Second } = loadSdk(other);
     await Second.initialize('key', 'host', { trackingConsent: 'yes' as 'granted', optOut: false });
-    expect(other.initialize).toHaveBeenLastCalledWith('key', 'host', { optOut: false, holdInAppMessagesForHandler: true });
+    expect(other.initialize).toHaveBeenLastCalledWith('key', 'host', { optOut: false, holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
     expect(warnSpy.mock.calls.flat().join('\n')).toContain("trackingConsent takes 'granted', 'denied' or 'pending'");
   });
 
@@ -350,14 +351,14 @@ describe('null and undefined from host code (contract item 19)', () => {
       enableDebug: true,
       logLevel: null as unknown as 'debug',
     });
-    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { enableDebug: true, holdInAppMessagesForHandler: true });
+    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { enableDebug: true, holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
   });
 
   it('a null config object is an empty one', async () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('key', 'host', null as unknown as object);
-    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { holdInAppMessagesForHandler: true });
+    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
   });
 
   it('a null sdkKey warns and does not switch the SDK off', async () => {

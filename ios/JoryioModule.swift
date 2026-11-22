@@ -28,7 +28,7 @@ class JoryioModule: RCTEventEmitter {
   /// install its own before the old one is torn down, and a blind clear would
   /// take the NEW one away. An ObjectIdentifier rather than a weak reference,
   /// because a weak reference already reads nil inside `deinit`.
-  private enum NativeCallback { case inApp, auth }
+  private enum NativeCallback { case inApp, auth, link }
   private static var owners: [NativeCallback: ObjectIdentifier] = [:]
   private static let ownerLock = NSLock()
 
@@ -53,6 +53,9 @@ class JoryioModule: RCTEventEmitter {
   /// message was then "handed to JS" and dropped, with no native rendering
   /// either, until the next process start.
   private func releaseNativeCallbacks() {
+    // This module's flags subscription (BACKLOG D446) goes with it.
+    flagsSubscription?.cancel()
+    flagsSubscription = nil
     if releaseOwnership(.inApp) {
       inAppHandedToJS = false
       Joryio.shared.clearInAppMessageCallback()
@@ -60,6 +63,14 @@ class JoryioModule: RCTEventEmitter {
     if releaseOwnership(.auth) {
       Joryio.shared.clearSdkAuthenticationErrorHandler()
     }
+    // The link handler forwards to THIS module's JS; without it links open natively again.
+    if releaseOwnership(.link) {
+      Joryio.shared.clearLinkHandler()
+    }
+    releasePendingLinks()
+    // This module's card feed listener (D444 Phase 3); a reload's new module installs its own.
+    cardsSubscription?.cancel()
+    cardsSubscription = nil
   }
 
   override func invalidate() {
@@ -75,7 +86,7 @@ class JoryioModule: RCTEventEmitter {
   // category) to avoid a duplicate Objective-C selector definition.
 
   override func supportedEvents() -> [String]! {
-    return ["JoryioInAppMessage", "JoryioSdkAuthError"]
+    return ["JoryioInAppMessage", "JoryioSdkAuthError", "JoryioPlacementsUpdated", "JoryioCardsUpdated", "JoryioLink", "JoryioFlagsUpdated"]
   }
 
   override func startObserving() {
@@ -179,6 +190,10 @@ class JoryioModule: RCTEventEmitter {
     // the message) or disableInAppMessages (nobody listens; native draws it).
     // Same key as the Android bridge.
     let holdInAppMessagesForHandler = config["holdInAppMessagesForHandler"] as? Bool ?? false
+    // iOS only (Android routes verified App Links itself): an https link on
+    // one of the app's associated domains goes to its own universal-link
+    // handling instead of Safari. Same key as Unity's ForwardUniversalLinks.
+    let forwardUniversalLinks = config["forwardUniversalLinks"] as? Bool ?? false
 
     // Consent and opt-out at start-up, the same options every Joryio SDK takes.
     // Missing here, so an RN app could only opt out AFTER initialize() - by
@@ -221,7 +236,8 @@ class JoryioModule: RCTEventEmitter {
         optOut: optOut,
         trackingConsent: trackingConsent,
         enableDebug: enableDebug,
-        logLevel: logLevel
+        logLevel: logLevel,
+        forwardUniversalLinks: forwardUniversalLinks
       )
     } else {
       joryioConfig = JoryioConfig(
@@ -243,7 +259,8 @@ class JoryioModule: RCTEventEmitter {
         sdkAuthenticationToken: sdkAuthenticationToken,
         optOut: optOut,
         enableDebug: enableDebug,
-        logLevel: logLevel
+        logLevel: logLevel,
+        forwardUniversalLinks: forwardUniversalLinks
       )
     }
 
@@ -262,6 +279,12 @@ class JoryioModule: RCTEventEmitter {
         self?.emitSdkAuthError(authError)
       }
 
+      // Every request names this bridge and its version (D427):
+      // X-Joryio-SDK-Wrapper: react-native + X-Joryio-SDK-Wrapper-Version.
+      // The JS layer sends its package version on every initialize().
+      if let wrapperVersion = config["sdkWrapperVersion"] as? String {
+        Joryio.setSdkWrapper(name: "react-native", version: wrapperVersion)
+      }
       Joryio.shared.initialize(sdkKey: sdkKey, apiHost: apiHost, config: joryioConfig)
 
       // Resolved even when the native SDK has not started YET. Before the
@@ -940,6 +963,72 @@ class JoryioModule: RCTEventEmitter {
     ])
   }
 
+  // MARK: - Feature flags (BACKLOG D446)
+  //
+  // Every getter carries the app's key AND default to the native getter,
+  // which answers value-or-default and logs the exposure as for a Swift
+  // caller. getFlag and getJsonFlag resolve `{ value }`, so a JSON null stays
+  // null in JS. Before initialize() the native getters answer the default.
+
+  /// The one native subscription this module holds; cancelled in invalidate().
+  private var flagsSubscription: FlagsSubscription?
+
+  /// A JS null arrives as nil or NSNull: both mean "no default".
+  private func flagDefault(_ value: Any?) -> Any? {
+    value is NSNull ? nil : value
+  }
+
+  private func wrapFlagValue(_ value: Any?) -> [String: Any] {
+    ["value": value ?? NSNull()]
+  }
+
+  @objc func getFlag(_ key: String?, defaultValue: Any?, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    let fallback = flagDefault(defaultValue)
+    guard let key, !key.isEmpty else { resolve(wrapFlagValue(fallback)); return }
+    resolve(wrapFlagValue(Joryio.shared.getFlag(key, default: fallback)))
+  }
+
+  @objc func getBoolFlag(_ key: String?, defaultValue: Bool, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    guard let key, !key.isEmpty else { resolve(defaultValue); return }
+    resolve(Joryio.shared.getBoolFlag(key, default: defaultValue))
+  }
+
+  @objc func getStringFlag(_ key: String?, defaultValue: String?, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    let fallback = defaultValue ?? ""
+    guard let key, !key.isEmpty else { resolve(fallback); return }
+    resolve(Joryio.shared.getStringFlag(key, default: fallback))
+  }
+
+  @objc func getNumberFlag(_ key: String?, defaultValue: Double, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    guard let key, !key.isEmpty else { resolve(defaultValue); return }
+    resolve(Joryio.shared.getNumberFlag(key, default: defaultValue))
+  }
+
+  @objc func getJsonFlag(_ key: String?, defaultValue: Any?, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    let fallback = flagDefault(defaultValue)
+    guard let key, !key.isEmpty else { resolve(wrapFlagValue(fallback)); return }
+    resolve(wrapFlagValue(Joryio.shared.getJsonFlag(key, default: fallback)))
+  }
+
+  /// Every flag held, key -> value. Logs no exposure.
+  @objc func getAllFlags(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    resolve(Joryio.shared.getAllFlags())
+  }
+
+  /// Resolves once the answer is in (or the request failed: the held flags stay).
+  @objc func refreshFlags(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    Joryio.shared.refreshFlags { resolve(nil) }
+  }
+
+  /// Start JoryioFlagsUpdated events (one native subscription; JS fans out).
+  @objc func enableFlagsUpdates() {
+    guard flagsSubscription == nil else { return }
+    flagsSubscription = Joryio.shared.onFlagsUpdated { [weak self] keys in
+      guard let self, self.hasListeners else { return }
+      self.sendEvent(withName: "JoryioFlagsUpdated", body: ["keys": keys])
+    }
+  }
+
   // MARK: - Utilities
 
   @objc func flush() {
@@ -961,6 +1050,209 @@ class JoryioModule: RCTEventEmitter {
   /// Native app could only wait for the next lifecycle event.
   @objc func syncInAppCampaigns() {
     Task { await Joryio.shared.syncInAppCampaigns() }
+  }
+
+  // MARK: - Placements (docs/PLACEMENTS_PLAN.md, D444)
+  //
+  // The native SDK does the work - fetching, caching, viewability rules,
+  // reporting, the identity guard. The bridge hands the data to JS as JSON and
+  // routes JS's mark* calls back to the native objects it last handed out, so
+  // a report always goes through the native generation check.
+
+  private var lastPlacements: [String: Placement] = [:]
+  private let placementsLock = NSLock()
+  private var placementsSubscription: PlacementsSubscription?
+
+  private func placementsJson(_ map: [String: Placement]) -> String {
+    placementsLock.lock()
+    for (k, p) in map { lastPlacements[k] = p }
+    placementsLock.unlock()
+    let dict = map.mapValues { $0.toJson() }
+    guard let data = try? JSONSerialization.data(withJSONObject: dict), let text = String(data: data, encoding: .utf8) else { return "{}" }
+    return text
+  }
+
+  @objc func getPlacements(_ keys: NSArray?, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let list = (keys as? [Any])?.compactMap { $0 as? String } ?? []
+    Joryio.shared.getPlacements(list) { [weak self] map in
+      resolve(self?.placementsJson(map) ?? "{}")
+    }
+  }
+
+  @objc func refreshPlacements(_ keys: NSArray?) {
+    Joryio.shared.refreshPlacements((keys as? [Any])?.compactMap { $0 as? String })
+  }
+
+  @objc func enablePlacementsUpdates() {
+    guard placementsSubscription == nil else { return }
+    placementsSubscription = Joryio.shared.onPlacementsUpdated { [weak self] map in
+      guard let self, self.hasListeners else { return }
+      self.sendEvent(withName: "JoryioPlacementsUpdated", body: ["json": self.placementsJson(map)])
+    }
+  }
+
+  @objc func disablePlacementsUpdates() {
+    placementsSubscription?.cancel()
+    placementsSubscription = nil
+  }
+
+  /// `action`: displayed | clicked | dismissed for an item, `control` for the holdout spot.
+  @objc func markPlacement(_ placementKey: String?, itemId: String?, action: String?, elementId: String?) {
+    guard let placementKey, let action else { return }
+    placementsLock.lock()
+    let placement = lastPlacements[placementKey]
+    placementsLock.unlock()
+    guard let placement else { return }
+    if action == "control" {
+      placement.markDisplayed()
+      return
+    }
+    guard let item = placement.items.first(where: { $0.id == itemId }) else { return }
+    switch action {
+    case "displayed": item.markDisplayed()
+    case "clicked": item.markClicked(elementId: (elementId?.isEmpty ?? true) ? nil : elementId)
+    case "dismissed": item.markDismissed()
+    default: break
+    }
+  }
+
+  // MARK: - Content cards (docs/PLACEMENTS_PLAN.md section 11, D444 Phase 3)
+  //
+  // The native SDK does the work - fetching, caching, the rate limit, the
+  // anonymous visitor's device state, reporting, the identity guard. The
+  // bridge hands the feed to JS as JSON (CardFeed.toJson, no delivery tokens)
+  // and routes JS's reports back to the native Card values it last handed
+  // out, so a report carries the card's own token and a card of a person who
+  // is no longer here is dropped by the native check. An id the bridge never
+  // handed out goes to the id overload (the native SDK looks it up).
+
+  private var lastCards: [String: Card] = [:]
+  private let cardsLock = NSLock()
+  private var cardsSubscription: CardsSubscription?
+
+  /// `page`: a cursor page (added to what was handed out) rather than the whole feed (which replaces it).
+  private func cardsJson(_ feed: CardFeed, page: Bool) -> String {
+    cardsLock.lock()
+    if !page { lastCards.removeAll() }
+    for card in feed.cards { lastCards[card.id] = card }
+    cardsLock.unlock()
+    guard let data = try? JSONSerialization.data(withJSONObject: feed.toJson()), let text = String(data: data, encoding: .utf8) else { return "{}" }
+    return text
+  }
+
+  private func lastCard(_ id: String) -> Card? {
+    cardsLock.lock()
+    defer { cardsLock.unlock() }
+    return lastCards[id]
+  }
+
+  /// `cursor`: a feed's `nextCursor` for the next page, nil for the feed.
+  @objc func getCards(_ cursor: String?, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let c = (cursor?.isEmpty ?? true) ? nil : cursor
+    Joryio.shared.getCards(cursor: c) { [weak self] feed in
+      resolve(self?.cardsJson(feed, page: c != nil) ?? "{}")
+    }
+  }
+
+  /// From the native cache, never a network call.
+  @objc func getUnreadCardCount(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    resolve(Joryio.shared.getUnreadCardCount())
+  }
+
+  @objc func markCardViewed(_ cardId: String?) {
+    guard let id = cardId, !id.isEmpty else { return }
+    if let card = lastCard(id) { Joryio.shared.markCardViewed(card) } else { Joryio.shared.markCardViewed(id) }
+  }
+
+  @objc func markCardRead(_ cardId: String?) {
+    guard let id = cardId, !id.isEmpty else { return }
+    if let card = lastCard(id) { Joryio.shared.markCardRead(card) } else { Joryio.shared.markCardRead(id) }
+  }
+
+  @objc func markCardClicked(_ cardId: String?) {
+    guard let id = cardId, !id.isEmpty else { return }
+    if let card = lastCard(id) { Joryio.shared.markCardClicked(card) } else { Joryio.shared.markCardClicked(id) }
+  }
+
+  @objc func dismissCard(_ cardId: String?) {
+    guard let id = cardId, !id.isEmpty else { return }
+    if let card = lastCard(id) { Joryio.shared.dismissCard(card) } else { Joryio.shared.dismissCard(id) }
+  }
+
+  @objc func refreshCards() {
+    Joryio.shared.refreshCards()
+  }
+
+  @objc func enableCardsUpdates() {
+    guard cardsSubscription == nil else { return }
+    // nil before initialize(): JS enables again after it (the call is dispatched).
+    cardsSubscription = Joryio.shared.attachCardFeedListener { [weak self] feed in
+      guard let self, self.hasListeners else { return }
+      self.sendEvent(withName: "JoryioCardsUpdated", body: ["json": self.cardsJson(feed, page: false)])
+    }
+  }
+
+  @objc func disableCardsUpdates() {
+    cardsSubscription?.cancel()
+    cardsSubscription = nil
+  }
+
+  // MARK: - Links (setLinkHandler)
+
+  /// Links waiting for the JS handler's answer, by id. Bounded: a JS side
+  /// that never answers costs at most this many entries, oldest dropped.
+  private var pendingLinks: [String: JoryioLink] = [:]
+  private var pendingLinkOrder: [String] = []
+  private static let maxPendingLinks = 32
+  private var nextLinkId = 0
+
+  /// JS set a link handler: every link the native SDK is about to open goes
+  /// to JS first (event `JoryioLink`), and waits there for completeLink. The
+  /// native handler takes the link at once - a bridge cannot answer
+  /// synchronously - and JS hands a declined one back through completeLink.
+  @objc func enableLinkHandler() {
+    takeOwnership(.link)
+    Joryio.shared.setLinkHandler { [weak self] link in
+      guard let self, self.hasListeners else { return false }
+      self.nextLinkId += 1
+      let id = "l\(self.nextLinkId)"
+      self.pendingLinks[id] = link
+      self.pendingLinkOrder.append(id)
+      while self.pendingLinkOrder.count > Self.maxPendingLinks {
+        self.pendingLinks[self.pendingLinkOrder.removeFirst()] = nil
+      }
+      var body: [String: Any] = [
+        "linkId": id,
+        "url": link.url.absoluteString,
+        "source": link.source.rawValue,
+        "isAppDeepLink": link.isAppDeepLink,
+      ]
+      if let v = link.campaignId { body["campaignId"] = v }
+      if let v = link.placementKey { body["placementKey"] = v }
+      if let v = link.itemId { body["itemId"] = v }
+      if let v = link.cardId { body["cardId"] = v }
+      self.sendEvent(withName: "JoryioLink", body: body)
+      return true
+    }
+  }
+
+  @objc func disableLinkHandler() {
+    if releaseOwnership(.link) { Joryio.shared.clearLinkHandler() }
+  }
+
+  /// The JS handler's answer: `handled` false opens the link as the SDK does
+  /// without a handler.
+  @objc func completeLink(_ linkId: String?, handled: Bool) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self, let linkId, let link = self.pendingLinks.removeValue(forKey: linkId) else { return }
+      self.pendingLinkOrder.removeAll { $0 == linkId }
+      if !handled { link.openDefault() }
+    }
+  }
+
+  private func releasePendingLinks() {
+    pendingLinks.removeAll()
+    pendingLinkOrder.removeAll()
   }
 
   /// Forget which campaigns have already been shown on this device.

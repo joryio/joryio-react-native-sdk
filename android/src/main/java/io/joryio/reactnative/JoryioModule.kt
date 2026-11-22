@@ -141,6 +141,10 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
             // requestPushPermissionAtLaunch could not prompt until the user left
             // the app and came back. The SDK keeps only the application context
             // and a weak reference to the Activity.
+            // Every request names this bridge and its version (D427):
+            // X-Joryio-SDK-Wrapper: react-native + X-Joryio-SDK-Wrapper-Version.
+            // The JS layer sends its package version on every initialize().
+            Joryio.setSdkWrapper("react-native", config.optString("sdkWrapperVersion"))
             Joryio.initialize(
                 context = reactApplicationContext.currentActivity ?: reactContext.applicationContext,
                 sdkKey = sdkKey,
@@ -900,6 +904,222 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
         Joryio.syncInAppCampaigns()
     }
 
+    // ── Placements (docs/PLACEMENTS_PLAN.md, D444) ──────────────────────
+    // The native SDK does the work - fetching, caching, viewability rules,
+    // reporting, the identity guard. The bridge hands the data to JS as JSON
+    // and routes JS's mark* calls back to the native objects it last handed
+    // out, so a report always goes through the native generation check.
+
+    private val lastPlacements = java.util.concurrent.ConcurrentHashMap<String, io.joryio.sdk.placements.Placement>()
+    private var placementsSubscription: java.io.Closeable? = null
+
+    private fun placementKeys(keys: ReadableArray?): List<String>? =
+        keys?.toArrayList()?.mapNotNull { it as? String }
+
+    private fun placementsJson(map: Map<String, io.joryio.sdk.placements.Placement>): String {
+        map.forEach { (k, p) -> lastPlacements[k] = p }
+        return map.entries.joinToString(",", "{", "}") { org.json.JSONObject.quote(it.key) + ":" + it.value.toJson() }
+    }
+
+    @ReactMethod
+    fun getPlacements(keys: ReadableArray?, promise: Promise) {
+        if (!Joryio.isInitialized()) {
+            promise.resolve("{}")
+            return
+        }
+        Joryio.getInstance().getPlacements(placementKeys(keys) ?: emptyList()) { map ->
+            promise.resolve(placementsJson(map))
+        }
+    }
+
+    @ReactMethod
+    fun refreshPlacements(keys: ReadableArray?) {
+        Joryio.refreshPlacements(placementKeys(keys))
+    }
+
+    @ReactMethod
+    fun enablePlacementsUpdates() {
+        if (placementsSubscription != null || !Joryio.isInitialized()) return
+        placementsSubscription = Joryio.getInstance().onPlacementsUpdated { map ->
+            val params = Arguments.createMap().apply { putString("json", placementsJson(map)) }
+            reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("JoryioPlacementsUpdated", params)
+        }
+    }
+
+    @ReactMethod
+    fun disablePlacementsUpdates() {
+        placementsSubscription?.close()
+        placementsSubscription = null
+    }
+
+    /** `action`: displayed | clicked | dismissed for an item, `control` for the holdout spot. */
+    @ReactMethod
+    fun markPlacement(placementKey: String?, itemId: String?, action: String?, elementId: String?) {
+        val placement = lastPlacements[placementKey ?: return] ?: return
+        if (action == "control") {
+            placement.markDisplayed()
+            return
+        }
+        val item = placement.items.firstOrNull { it.id == itemId } ?: return
+        when (action) {
+            "displayed" -> item.markDisplayed()
+            "clicked" -> item.markClicked(elementId?.takeIf { it.isNotEmpty() })
+            "dismissed" -> item.markDismissed()
+        }
+    }
+
+    // ── Content cards (docs/PLACEMENTS_PLAN.md section 11, D444 Phase 3) ──
+    // The native SDK does the work - fetching, caching, the rate limit, the
+    // anonymous visitor's device state, reporting, the identity guard. The
+    // bridge hands the feed to JS as JSON (CardFeed.toJson, no delivery
+    // tokens) and routes JS's reports back to the native Card objects it last
+    // handed out, so a report carries the card's own token and a card of a
+    // person who is no longer here is dropped by the native check. An id the
+    // bridge never handed out goes to the id overload (the native SDK looks
+    // it up in its cache).
+
+    private val lastCards = java.util.concurrent.ConcurrentHashMap<String, io.joryio.sdk.cards.Card>()
+    private var cardsSubscription: java.io.Closeable? = null
+
+    /** [page]: a cursor page (added to what was handed out) rather than the whole feed (which replaces it). */
+    private fun cardsJson(feed: io.joryio.sdk.cards.CardFeed, page: Boolean): String {
+        if (!page) lastCards.clear()
+        feed.cards.forEach { lastCards[it.id] = it }
+        return feed.toJson()
+    }
+
+    /** `cursor`: a feed's `nextCursor` for the next page, null for the feed. */
+    @ReactMethod
+    fun getCards(cursor: String?, promise: Promise) {
+        if (!Joryio.isInitialized()) {
+            promise.resolve(io.joryio.sdk.cards.CardFeed.EMPTY.toJson())
+            return
+        }
+        val c = cursor?.takeIf { it.isNotEmpty() }
+        Joryio.getInstance().getCards(c) { feed ->
+            promise.resolve(cardsJson(feed, page = c != null))
+        }
+    }
+
+    /** From the native cache, never a network call. */
+    @ReactMethod
+    fun getUnreadCardCount(promise: Promise) {
+        promise.resolve(if (Joryio.isInitialized()) Joryio.getInstance().getUnreadCardCount() else 0)
+    }
+
+    @ReactMethod
+    fun markCardViewed(cardId: String?) {
+        val id = cardId?.takeIf { it.isNotEmpty() } ?: return
+        if (!Joryio.isInitialized()) return
+        val sdk = Joryio.getInstance()
+        lastCards[id]?.let { sdk.markCardViewed(it) } ?: sdk.markCardViewed(id)
+    }
+
+    @ReactMethod
+    fun markCardRead(cardId: String?) {
+        val id = cardId?.takeIf { it.isNotEmpty() } ?: return
+        if (!Joryio.isInitialized()) return
+        val sdk = Joryio.getInstance()
+        lastCards[id]?.let { sdk.markCardRead(it) } ?: sdk.markCardRead(id)
+    }
+
+    @ReactMethod
+    fun markCardClicked(cardId: String?) {
+        val id = cardId?.takeIf { it.isNotEmpty() } ?: return
+        if (!Joryio.isInitialized()) return
+        val sdk = Joryio.getInstance()
+        lastCards[id]?.let { sdk.markCardClicked(it) } ?: sdk.markCardClicked(id)
+    }
+
+    @ReactMethod
+    fun dismissCard(cardId: String?) {
+        val id = cardId?.takeIf { it.isNotEmpty() } ?: return
+        if (!Joryio.isInitialized()) return
+        val sdk = Joryio.getInstance()
+        lastCards[id]?.let { sdk.dismissCard(it) } ?: sdk.dismissCard(id)
+    }
+
+    /** Queued until initialize() by the native companion, like refreshPlacements. */
+    @ReactMethod
+    fun refreshCards() {
+        Joryio.refreshCards()
+    }
+
+    @ReactMethod
+    fun enableCardsUpdates() {
+        if (cardsSubscription != null || !Joryio.isInitialized()) return
+        cardsSubscription = Joryio.getInstance().onCardsUpdated { feed ->
+            val params = Arguments.createMap().apply { putString("json", cardsJson(feed, page = false)) }
+            reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("JoryioCardsUpdated", params)
+        }
+    }
+
+    @ReactMethod
+    fun disableCardsUpdates() {
+        cardsSubscription?.close()
+        cardsSubscription = null
+    }
+
+    // ── Links (setLinkHandler) ─────────────────────────────────────────
+
+    /** Links waiting for the JS handler's answer, oldest first; bounded so a JS side that never answers costs little. */
+    private val pendingLinks = java.util.LinkedHashMap<String, io.joryio.sdk.core.JoryioLink>()
+    private var nextLinkId = 0
+
+    /**
+     * JS set a link handler: every link the native SDK is about to open goes
+     * to JS first (event `JoryioLink`) and waits there for [completeLink]. The
+     * native handler takes the link at once - a bridge cannot answer
+     * synchronously - and JS hands a declined one back through completeLink.
+     * The handler is app-wide in the native SDK, so this works before
+     * initialize().
+     */
+    @ReactMethod
+    fun enableLinkHandler() {
+        linkOwner.set(ownerToken)
+        Joryio.setLinkHandler { link ->
+            if (!reactApplicationContext.hasActiveReactInstance()) return@setLinkHandler false
+            val id = synchronized(pendingLinks) {
+                nextLinkId += 1
+                val next = "l$nextLinkId"
+                pendingLinks[next] = link
+                while (pendingLinks.size > MAX_PENDING_LINKS) pendingLinks.remove(pendingLinks.keys.first())
+                next
+            }
+            val params = Arguments.createMap().apply {
+                putString("linkId", id)
+                putString("url", link.url)
+                putString("source", link.source.wire)
+                putBoolean("isAppDeepLink", link.isAppDeepLink)
+                link.campaignId?.let { putString("campaignId", it) }
+                link.placementKey?.let { putString("placementKey", it) }
+                link.itemId?.let { putString("itemId", it) }
+                link.cardId?.let { putString("cardId", it) }
+            }
+            reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("JoryioLink", params)
+            true
+        }
+    }
+
+    @ReactMethod
+    fun disableLinkHandler() {
+        if (linkOwner.compareAndSet(ownerToken, null)) Joryio.clearLinkHandler()
+    }
+
+    /** The JS handler's answer: `handled` false opens the link as the SDK does without a handler. */
+    @ReactMethod
+    fun completeLink(linkId: String?, handled: Boolean?) {
+        if (linkId == null) return
+        val link = synchronized(pendingLinks) { pendingLinks.remove(linkId) } ?: return
+        if (handled != true) link.openDefault()
+    }
+
     /**
      * Forget local frequency state so a campaign can be re-tested.
      *
@@ -1103,6 +1323,99 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // ─── Feature flags (BACKLOG D446) ─────────────────────────────────────
+    //
+    // Every getter carries the app's key AND default to the native getter
+    // (the companion: the default before initialize()), which answers
+    // value-or-default and logs the exposure as for a Kotlin caller. getFlag
+    // and getJsonFlag resolve `{ value }`, so a JSON null stays null in JS.
+
+    /** The one native subscription this module holds; closed in invalidate(). */
+    private var flagsSubscription: java.io.Closeable? = null
+
+    @ReactMethod
+    fun getFlag(key: String?, defaultValue: Dynamic?, promise: Promise) {
+        val fallback = fromDynamic(defaultValue)
+        promise.resolve(wrapFlagValue(if (key.isNullOrEmpty()) fallback else Joryio.getFlag(key, fallback)))
+    }
+
+    @ReactMethod
+    fun getBoolFlag(key: String?, defaultValue: Dynamic?, promise: Promise) {
+        // Dynamic, not Boolean: a JS null would throw before the method ran.
+        val fallback = fromDynamic(defaultValue) as? Boolean ?: false
+        promise.resolve(if (key.isNullOrEmpty()) fallback else Joryio.getBoolFlag(key, fallback))
+    }
+
+    @ReactMethod
+    fun getStringFlag(key: String?, defaultValue: String?, promise: Promise) {
+        val fallback = defaultValue ?: ""
+        promise.resolve(if (key.isNullOrEmpty()) fallback else Joryio.getStringFlag(key, fallback))
+    }
+
+    @ReactMethod
+    fun getNumberFlag(key: String?, defaultValue: Dynamic?, promise: Promise) {
+        // Dynamic, not Double: a JS null would throw before the method ran.
+        val fallback = fromDynamic(defaultValue) as? Double ?: 0.0
+        promise.resolve(if (key.isNullOrEmpty()) fallback else Joryio.getNumberFlag(key, fallback))
+    }
+
+    @ReactMethod
+    fun getJsonFlag(key: String?, defaultValue: Dynamic?, promise: Promise) {
+        val fallback = fromDynamic(defaultValue)
+        promise.resolve(wrapFlagValue(if (key.isNullOrEmpty()) fallback else Joryio.getJsonFlag(key, fallback)))
+    }
+
+    /** Every flag held, key -> value. Logs no exposure. */
+    @ReactMethod
+    fun getAllFlags(promise: Promise) {
+        promise.resolve(Arguments.makeNativeMap(Joryio.getAllFlags()))
+    }
+
+    /** Resolves once the answer is in (or the request failed: the held flags stay). */
+    @ReactMethod
+    fun refreshFlags(promise: Promise) {
+        Joryio.refreshFlags { promise.resolve(null) }
+    }
+
+    /** Start JoryioFlagsUpdated events (one native subscription; JS fans out). */
+    @ReactMethod
+    fun enableFlagsUpdates() {
+        synchronized(this) {
+            if (flagsSubscription != null) return
+            flagsSubscription = Joryio.onFlagsUpdated { keys ->
+                val params = Arguments.createMap()
+                params.putArray("keys", Arguments.fromList(keys))
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("JoryioFlagsUpdated", params)
+            }
+        }
+    }
+
+    private fun fromDynamic(value: Dynamic?): Any? = if (value == null) null else when (value.type) {
+        ReadableType.Null -> null
+        ReadableType.Boolean -> value.asBoolean()
+        ReadableType.Number -> value.asDouble()
+        ReadableType.String -> value.asString()
+        ReadableType.Map -> value.asMap()?.toHashMap()
+        ReadableType.Array -> value.asArray()?.toArrayList()
+    }
+
+    private fun wrapFlagValue(value: Any?): WritableMap {
+        val map = Arguments.createMap()
+        @Suppress("UNCHECKED_CAST")
+        when (value) {
+            null -> map.putNull("value")
+            is Boolean -> map.putBoolean("value", value)
+            is Number -> map.putDouble("value", value.toDouble())
+            is String -> map.putString("value", value)
+            is Map<*, *> -> map.putMap("value", Arguments.makeNativeMap(value as Map<String, Any?>))
+            is List<*> -> map.putArray("value", Arguments.makeNativeArray(value))
+            else -> map.putString("value", value.toString())
+        }
+        return map
+    }
+
     // ─── Utilities ─────────────────────────────────────────────────────────
 
     @ReactMethod
@@ -1185,11 +1498,25 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
         if (authOwner.compareAndSet(ownerToken, null)) {
             Joryio.setSdkAuthenticationErrorHandler(null)
         }
+        // The link handler forwards to THIS module's JS; without it links open natively again.
+        if (linkOwner.compareAndSet(ownerToken, null)) {
+            Joryio.clearLinkHandler()
+        }
+        synchronized(pendingLinks) { pendingLinks.clear() }
+        placementsSubscription?.close()
+        placementsSubscription = null
+        cardsSubscription?.close()
+        cardsSubscription = null
+        synchronized(this) {
+            flagsSubscription?.close()
+            flagsSubscription = null
+        }
         super.invalidate()
     }
 
     /** Identity of this module instance for the owner checks above. Holds nothing. */
     private val ownerToken = Any()
+
 
     // Required for NativeEventEmitter
     @ReactMethod
@@ -1212,6 +1539,10 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
         /** The module whose callback the native SDK currently holds; see invalidate(). */
         val inAppOwner = AtomicReference<Any?>(null)
         val authOwner = AtomicReference<Any?>(null)
+        val linkOwner = AtomicReference<Any?>(null)
+
+        /** Links held at once for the JS link handler's answer (enableLinkHandler). */
+        const val MAX_PENDING_LINKS = 32
 
         /**
          * How long after returning to the foreground a permission answer may
