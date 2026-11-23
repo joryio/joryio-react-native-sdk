@@ -928,38 +928,71 @@ const EMPTY_CARD_FEED_JSON = '{"cards":[],"unreadCount":0,"nextCursor":null,"sta
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
+/** Native JSON (Card.toJson on iOS / Android) -> a Card, or null when it is not one. */
+function toCard(c: any): Card | null {
+  if (!c || typeof c !== 'object' || typeof c.id !== 'string') return null;
+  return {
+    id: c.id,
+    campaignId: str(c.campaignId) ?? '',
+    variantId: str(c.variantId),
+    title: str(c.title),
+    body: str(c.body),
+    imageUrl: str(c.imageUrl),
+    buttonText: str(c.buttonText),
+    url: str(c.url),
+    pinned: c.pinned === true,
+    createdAt: str(c.createdAt) ?? '',
+    expiresAt: str(c.expiresAt),
+    read: c.read === true,
+    clicked: c.clicked === true,
+  };
+}
+
+const parseJson = (json: unknown): any => {
+  try {
+    return typeof json === 'string' ? JSON.parse(json) : json;
+  } catch {
+    return null;
+  }
+};
+
 /** Native JSON (CardFeed.toJson on iOS / Android) -> a CardFeed. A bad answer is the empty feed. */
 function toCardFeed(json: unknown): CardFeed {
-  let raw: any = null;
-  try {
-    raw = typeof json === 'string' ? JSON.parse(json) : json;
-  } catch {
-    raw = null;
-  }
+  let raw: any = parseJson(json);
   if (!raw || typeof raw !== 'object') raw = {};
-  const cards: Card[] = (Array.isArray(raw.cards) ? raw.cards : [])
-    .filter((c: any) => c && typeof c === 'object' && typeof c.id === 'string')
-    .map((c: any) => ({
-      id: c.id,
-      campaignId: str(c.campaignId) ?? '',
-      variantId: str(c.variantId),
-      title: str(c.title),
-      body: str(c.body),
-      imageUrl: str(c.imageUrl),
-      buttonText: str(c.buttonText),
-      url: str(c.url),
-      pinned: c.pinned === true,
-      createdAt: str(c.createdAt) ?? '',
-      expiresAt: str(c.expiresAt),
-      read: c.read === true,
-      clicked: c.clicked === true,
-    }));
+  const cards: Card[] = (Array.isArray(raw.cards) ? raw.cards : []).map(toCard).filter((c: Card | null): c is Card => c !== null);
   return {
     cards,
     unreadCount: typeof raw.unreadCount === 'number' && raw.unreadCount >= 0 ? raw.unreadCount : 0,
     nextCursor: str(raw.nextCursor),
     stateScope: raw.stateScope === 'device' ? 'device' : 'server',
   };
+}
+
+/**
+ * Returned by every `on...Updated` listener - `onCardsUpdated`,
+ * `onPlacementsUpdated` and `onFlagsUpdated`: `cancel()` stops the updates.
+ * It is also callable, `sub()` being `sub.cancel()`, so code that called the
+ * returned function keeps working. Cancelling twice is harmless.
+ *
+ * One type with the same name and the same `cancel()` on every Joryio SDK
+ * (iOS, Android, web; Unity `JoryioSubscription.Cancel()`).
+ */
+export interface JoryioSubscription {
+  (): void;
+  cancel(): void;
+}
+
+function joryioSubscription(stop: () => void): JoryioSubscription {
+  let done = false;
+  const cancel = (): void => {
+    if (done) return;
+    done = true;
+    stop();
+  };
+  const sub = (() => cancel()) as JoryioSubscription;
+  sub.cancel = cancel;
+  return sub;
 }
 
 /** A card or its id. */
@@ -984,9 +1017,9 @@ export interface JoryioCardFeedProps {
    * (the click is already reported). Without this only an http(s) link is
    * opened; no other scheme is ever handed to the system.
    */
-  onDeepLink?: (url: string, cardId: string) => void;
-  /** After each draw: how many cards were drawn, and the unread count. */
-  onRender?: (info: { cardCount: number; unreadCount: number }) => void;
+  onDeepLink?: (url: string, card: Card) => void;
+  /** Called after each draw with the feed drawn. */
+  onRender?: (feed: CardFeed) => void;
 }
 
 let nativeCardFeedView: any = null;
@@ -1012,17 +1045,14 @@ export function JoryioCardFeed(props: JoryioCardFeedProps): any {
     pinnedLabel: props.pinnedLabel,
     dismissLabel: props.dismissLabel,
     unreadLabel: props.unreadLabel,
+    // The native views send the feed and the card as their toJson() (the same JSON as getCards).
     onCardFeedRender: (e: any) => {
-      const info = e?.nativeEvent || {};
-      props.onRender?.({
-        cardCount: typeof info.cardCount === 'number' ? info.cardCount : 0,
-        unreadCount: typeof info.unreadCount === 'number' ? info.unreadCount : 0,
-      });
+      props.onRender?.(toCardFeed(e?.nativeEvent?.feed));
     },
     onCardDeepLink: (e: any) => {
       const url = e?.nativeEvent?.url;
-      const cardId = e?.nativeEvent?.cardId;
-      if (typeof url === 'string') props.onDeepLink?.(url, typeof cardId === 'string' ? cardId : '');
+      const card = toCard(parseJson(e?.nativeEvent?.card));
+      if (typeof url === 'string' && card) props.onDeepLink?.(url, card);
     },
   });
 }
@@ -2725,16 +2755,16 @@ class JoryioSDK {
   }
 
   /**
-   * `callback(keys)` is called with the keys whose value changed. Returns an
-   * unsubscribe function. Safe before initialize(): updates start once the
-   * SDK runs.
+   * `callback(keys)` is called with the keys whose value changed. Returns a
+   * JoryioSubscription: `cancel()` it to stop (calling it is the same). Safe
+   * before initialize(): updates start once the SDK runs.
    */
-  onFlagsUpdated(callback: (keys: string[]) => unknown): () => void {
+  onFlagsUpdated(callback: (keys: string[]) => unknown): JoryioSubscription {
     if (typeof callback !== 'function') {
       warn('onFlagsUpdated() needs a callback function; ignored.');
-      return () => {};
+      return joryioSubscription(() => {});
     }
-    if (!isModuleAvailable || !emitter) return () => {};
+    if (!isModuleAvailable || !emitter) return joryioSubscription(() => {});
     const guarded = guardedCallback<string[]>('onFlagsUpdated', callback);
     const subscription = emitter.addListener('JoryioFlagsUpdated', (event: unknown) => {
       const keys = (event as { keys?: unknown } | null)?.keys;
@@ -2743,7 +2773,7 @@ class JoryioSDK {
     // One native subscription for the module, held until initialize() like
     // any control call; native ignores a second enable.
     this._dispatch(() => JoryioModule.enableFlagsUpdates?.());
-    return () => subscription.remove();
+    return joryioSubscription(() => subscription.remove());
   }
 
   /**
@@ -2768,13 +2798,14 @@ class JoryioSDK {
   }
 
   /**
-   * Called with the placements whose content changed. Returns an unsubscribe.
+   * Called with the placements whose content changed. Returns a
+   * JoryioSubscription: `cancel()` it to stop (calling it is the same).
    * An app with its own push messaging handler should call
    * refreshPlacements() on a `jry_sync: "placements"` data message; the
    * native SDKs handle it themselves otherwise.
    */
-  onPlacementsUpdated(callback: (placements: Record<string, Placement>) => unknown): () => void {
-    if (typeof callback !== 'function' || !isModuleAvailable || !emitter) return () => {};
+  onPlacementsUpdated(callback: (placements: Record<string, Placement>) => unknown): JoryioSubscription {
+    if (typeof callback !== 'function' || !isModuleAvailable || !emitter) return joryioSubscription(() => {});
     const subscription = emitter.addListener('JoryioPlacementsUpdated', (e: any) => {
       try {
         callback(toPlacements(e?.json));
@@ -2784,14 +2815,11 @@ class JoryioSDK {
     });
     this._placementListeners += 1;
     this._dispatch(() => JoryioModule.enablePlacementsUpdates?.());
-    let removed = false;
-    return () => {
-      if (removed) return;
-      removed = true;
+    return joryioSubscription(() => {
       subscription.remove();
       this._placementListeners = Math.max(0, this._placementListeners - 1);
       if (this._placementListeners === 0) this._dispatch(() => JoryioModule.disablePlacementsUpdates?.());
-    };
+    });
   }
 
   /**
@@ -2856,9 +2884,13 @@ class JoryioSDK {
     this._dispatch(() => JoryioModule.refreshCards?.());
   }
 
-  /** Called with the whole feed whenever it changes (a refresh, a report, an identity change). Returns an unsubscribe. */
-  onCardsUpdated(callback: (feed: CardFeed) => unknown): () => void {
-    if (typeof callback !== 'function' || !isModuleAvailable || !emitter) return () => {};
+  /**
+   * Called with the whole feed whenever it changes (a refresh, a report, an
+   * identity change). Returns a JoryioSubscription: `cancel()` it to stop
+   * (calling it, `sub()`, is the same).
+   */
+  onCardsUpdated(callback: (feed: CardFeed) => unknown): JoryioSubscription {
+    if (typeof callback !== 'function' || !isModuleAvailable || !emitter) return joryioSubscription(() => {});
     const subscription = emitter.addListener('JoryioCardsUpdated', (e: any) => {
       try {
         callback(toCardFeed(e?.json));
@@ -2868,14 +2900,11 @@ class JoryioSDK {
     });
     this._cardListeners += 1;
     this._dispatch(() => JoryioModule.enableCardsUpdates?.());
-    let removed = false;
-    return () => {
-      if (removed) return;
-      removed = true;
+    return joryioSubscription(() => {
       subscription.remove();
       this._cardListeners = Math.max(0, this._cardListeners - 1);
       if (this._cardListeners === 0) this._dispatch(() => JoryioModule.disableCardsUpdates?.());
-    };
+    });
   }
 
   /**

@@ -84,6 +84,8 @@ describe('feature flags', () => {
     const listeners = native.__listeners.get('JoryioFlagsUpdated')!;
     listeners.forEach((cb) => cb({ keys: ['headline', 7] }));
     expect(seen).toEqual([['headline']]);
+    // A JoryioSubscription: cancel() stops it (calling it is the same); twice is harmless.
+    off.cancel();
     off();
     expect(native.__listeners.get('JoryioFlagsUpdated')!.size).toBe(0);
   });

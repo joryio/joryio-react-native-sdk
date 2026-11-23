@@ -75,10 +75,12 @@ describe('placements (React Native)', () => {
     expect(native.enablePlacementsUpdates).toHaveBeenCalled();
     native.__listeners.get('JoryioPlacementsUpdated')!.forEach((cb) => cb({ json }));
     expect(heard).toEqual([['home_hero', 'cart_upsell']]);
+    // A JoryioSubscription: cancel() stops it (calling it is the same); twice is harmless.
+    off1.cancel();
     off1();
     await flush();
     expect(native.disablePlacementsUpdates).not.toHaveBeenCalled();
-    off2();
+    off2.cancel();
     await flush();
     expect(native.disablePlacementsUpdates).toHaveBeenCalledTimes(1);
   });

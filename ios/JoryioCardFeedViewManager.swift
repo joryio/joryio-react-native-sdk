@@ -7,8 +7,8 @@ import JoryioUI
 /// own CardFeedViewController, so the feed, paging, viewability (viewed then
 /// read), the clicked / dismissed reports and the link rule are exactly the
 /// native ones - one implementation per platform. App deep links
-/// (`myapp://...`) go to JS (`onCardDeepLink`); http(s) opens in the system
-/// natively; any other scheme is never opened.
+/// (`myapp://...`) go to JS (`onCardDeepLink`, with the whole card); http(s)
+/// opens in the system natively; any other scheme is never opened.
 @objc(JoryioCardFeedViewManager)
 class JoryioCardFeedViewManager: RCTViewManager {
   override static func requiresMainQueueSetup() -> Bool { true }
@@ -49,15 +49,23 @@ final class JoryioCardFeedHostView: UIView {
       content.trailingAnchor.constraint(equalTo: trailingAnchor),
       content.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
+    // The feed and the card cross as their toJson() text, the same JSON as
+    // getCards, so JS hands onRender / onDeepLink the same CardFeed and Card
+    // as every other Joryio SDK.
     feed.onRender = { [weak self] f in
-      self?.onCardFeedRender?(["cardCount": f.cards.count, "unreadCount": f.unreadCount])
+      self?.onCardFeedRender?(["feed": Self.jsonText(f.toJson())])
     }
     feed.onDeepLink = { [weak self] url, card in
-      self?.onCardDeepLink?(["url": url.absoluteString, "cardId": card.id])
+      self?.onCardDeepLink?(["url": url.absoluteString, "card": Self.jsonText(card.toJson())])
     }
   }
 
   required init?(coder: NSCoder) { nil }
+
+  private static func jsonText(_ object: [String: Any]) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: object), let text = String(data: data, encoding: .utf8) else { return "{}" }
+    return text
+  }
 
   // The controller is not contained in a parent (React Native owns the view
   // tree), so its appearance - which subscribes to the feed and runs the

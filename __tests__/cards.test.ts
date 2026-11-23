@@ -161,8 +161,10 @@ describe('content cards (React Native)', () => {
     native.__listeners.get('JoryioCardsUpdated')!.forEach((cb) => cb({ json: feedJson }));
     warn.mockRestore();
     expect(heard).toEqual([1]);
+    // A JoryioSubscription: cancel() stops it (the same name on all five SDKs); calling it is the same.
+    off1.cancel();
     off1();
-    off1();
+    off1.cancel();
     await flush();
     expect(native.disableCardsUpdates).not.toHaveBeenCalled();
     off2();
@@ -170,9 +172,64 @@ describe('content cards (React Native)', () => {
     expect(native.disableCardsUpdates).toHaveBeenCalledTimes(1);
   });
 
-  it('onCardsUpdated without the native module is a no-op unsubscribe', () => {
+  it('onCardsUpdated without the native module is a no-op subscription', () => {
     const off = loadSdk(null).default.onCardsUpdated(() => undefined);
+    expect(typeof off.cancel).toBe('function');
+    expect(() => off.cancel()).not.toThrow();
     expect(() => off()).not.toThrow();
+  });
+});
+
+/**
+ * `<JoryioCardFeed />`: onDeepLink gets the whole Card and onRender the whole
+ * CardFeed, as on iOS, Android and web (the native views send their toJson()).
+ */
+describe('<JoryioCardFeed /> callbacks', () => {
+  const loadWithView = () => {
+    let mod: typeof import('../src') | undefined;
+    jest.isolateModules(() => {
+      jest.doMock(
+        'react-native',
+        () => ({
+          NativeModules: { JoryioModule: makeNative() },
+          NativeEventEmitter: class {
+            addListener() {
+              return { remove: () => undefined };
+            }
+          },
+          requireNativeComponent: (name: string) => name,
+        }),
+        { virtual: true },
+      );
+      jest.doMock('react', () => ({ useState: (v: unknown) => [v, () => undefined], createElement: (type: unknown, props: any) => ({ type, props }) }));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      mod = require('../src');
+    });
+    return mod!;
+  };
+  const card2 = JSON.stringify(JSON.parse(feedJson).cards[1]);
+
+  it('onDeepLink gets the url and the parsed Card', () => {
+    const { JoryioCardFeed } = loadWithView();
+    const routed: Array<[string, any]> = [];
+    const el = JoryioCardFeed({ onDeepLink: (url, card) => routed.push([url, card]) });
+    expect(el.type).toBe('JoryioCardFeedView');
+    el.props.onCardDeepLink({ nativeEvent: { url: 'myapp://cart', card: card2 } });
+    expect(routed).toEqual([['myapp://cart', JSON.parse(feedJson).cards[1]]]);
+    // No card (an older native view) or a bad one: nothing is called.
+    el.props.onCardDeepLink({ nativeEvent: { url: 'myapp://cart' } });
+    el.props.onCardDeepLink({ nativeEvent: { url: 'myapp://cart', card: 'not json' } });
+    expect(routed).toHaveLength(1);
+  });
+
+  it('onRender gets the parsed CardFeed', () => {
+    const { JoryioCardFeed } = loadWithView();
+    const drawn: any[] = [];
+    const el = JoryioCardFeed({ onRender: (feed) => drawn.push(feed) });
+    el.props.onCardFeedRender({ nativeEvent: { feed: feedJson } });
+    expect(drawn).toEqual([JSON.parse(feedJson)]);
+    el.props.onCardFeedRender({ nativeEvent: {} });
+    expect(drawn[1]).toEqual({ cards: [], unreadCount: 0, nextCursor: null, stateScope: 'server' });
   });
 });
 
@@ -218,6 +275,18 @@ describe('content cards bridges (source)', () => {
 
   it('the iOS bridge listens through attachCardFeedListener (nil before initialize, so a later enable retries)', () => {
     expect(SWIFT).toMatch(/cardsSubscription = Joryio\.shared\.attachCardFeedListener/);
+    // SDK-internal on iOS (SPI): an app listens with onCardsUpdated.
+    expect(SWIFT).toMatch(/^@_spi\(JoryioInternal\) import Joryio$/m);
     expect(SWIFT).toContain('"JoryioCardsUpdated"');
+  });
+
+  it('the feed views send the whole card and feed to JS (toJson), not just the id', () => {
+    const viewKt = read('android/src/main/java/io/joryio/reactnative/JoryioCardFeedViewManager.kt');
+    const viewSwift = read('ios/JoryioCardFeedViewManager.swift');
+    expect(viewKt).toContain('putString("card", card.toJson())');
+    expect(viewKt).toContain('putString("feed", f.toJson())');
+    expect(viewSwift).toContain('"card": Self.jsonText(card.toJson())');
+    expect(viewSwift).toContain('"feed": Self.jsonText(f.toJson())');
+    expect(viewKt + viewSwift).not.toMatch(/"cardId"/);
   });
 });

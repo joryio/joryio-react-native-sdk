@@ -20,8 +20,8 @@ import io.joryio.sdk.ui.CardFeedView
  *
  * React Native lays out only the views it created, so this wrapper measures
  * and lays out the CardFeedView itself to the size React Native gave it.
- * App deep links (`myapp://...`) go to JS (`onCardDeepLink`); http(s) opens in
- * the browser natively; any other scheme is never opened.
+ * App deep links (`myapp://...`) go to JS (`onCardDeepLink`, with the whole
+ * card); http(s) opens in the browser natively; any other scheme is never opened.
  */
 class JoryioCardFeedViewManager : SimpleViewManager<JoryioCardFeedHost>() {
     override fun getName() = "JoryioCardFeedView"
@@ -62,18 +62,20 @@ class JoryioCardFeedHost(context: Context) : FrameLayout(context) {
 
     init {
         addView(feed, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        // The feed and the card cross as their toJson() text, the same JSON as
+        // getCards, so JS hands onRender / onDeepLink the same CardFeed and
+        // Card as every other Joryio SDK.
         feed.onRender = { f ->
             relayout?.let { post(it) }
             emit("onCardFeedRender", Arguments.createMap().apply {
-                putInt("cardCount", f.cards.size)
-                putInt("unreadCount", f.unreadCount)
+                putString("feed", f.toJson())
             })
         }
         // App deep links go to JS, which routes them (the view opens only http(s)).
         feed.onDeepLink = { url, card ->
             emit("onCardDeepLink", Arguments.createMap().apply {
                 putString("url", url)
-                putString("cardId", card.id)
+                putString("card", card.toJson())
             })
         }
     }

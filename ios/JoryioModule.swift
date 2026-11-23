@@ -6,7 +6,8 @@ import UserNotifications
 // type 'RCTEventEmitter' in scope", which is what happened here: iOS had never
 // been built for either demo app, so nothing had ever compiled this file.
 import React
-import Joryio
+// attachCardFeedListener is SDK-internal (SPI): apps use onCardsUpdated.
+@_spi(JoryioInternal) import Joryio
 
 /// React Native bridge for the Joryio iOS SDK.
 /// Each method delegates to the native `Joryio.shared` singleton using its
@@ -971,7 +972,7 @@ class JoryioModule: RCTEventEmitter {
   // null in JS. Before initialize() the native getters answer the default.
 
   /// The one native subscription this module holds; cancelled in invalidate().
-  private var flagsSubscription: FlagsSubscription?
+  private var flagsSubscription: JoryioSubscription?
 
   /// A JS null arrives as nil or NSNull: both mean "no default".
   private func flagDefault(_ value: Any?) -> Any? {
@@ -1061,7 +1062,7 @@ class JoryioModule: RCTEventEmitter {
 
   private var lastPlacements: [String: Placement] = [:]
   private let placementsLock = NSLock()
-  private var placementsSubscription: PlacementsSubscription?
+  private var placementsSubscription: JoryioSubscription?
 
   private func placementsJson(_ map: [String: Placement]) -> String {
     placementsLock.lock()
@@ -1128,7 +1129,7 @@ class JoryioModule: RCTEventEmitter {
 
   private var lastCards: [String: Card] = [:]
   private let cardsLock = NSLock()
-  private var cardsSubscription: CardsSubscription?
+  private var cardsSubscription: JoryioSubscription?
 
   /// `page`: a cursor page (added to what was handed out) rather than the whole feed (which replaces it).
   private func cardsJson(_ feed: CardFeed, page: Bool) -> String {

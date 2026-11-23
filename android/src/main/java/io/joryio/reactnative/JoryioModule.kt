@@ -911,7 +911,7 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
     // out, so a report always goes through the native generation check.
 
     private val lastPlacements = java.util.concurrent.ConcurrentHashMap<String, io.joryio.sdk.placements.Placement>()
-    private var placementsSubscription: java.io.Closeable? = null
+    private var placementsSubscription: io.joryio.sdk.JoryioSubscription? = null
 
     private fun placementKeys(keys: ReadableArray?): List<String>? =
         keys?.toArrayList()?.mapNotNull { it as? String }
@@ -950,7 +950,7 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun disablePlacementsUpdates() {
-        placementsSubscription?.close()
+        placementsSubscription?.cancel()
         placementsSubscription = null
     }
 
@@ -981,7 +981,7 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
     // it up in its cache).
 
     private val lastCards = java.util.concurrent.ConcurrentHashMap<String, io.joryio.sdk.cards.Card>()
-    private var cardsSubscription: java.io.Closeable? = null
+    private var cardsSubscription: io.joryio.sdk.JoryioSubscription? = null
 
     /** [page]: a cursor page (added to what was handed out) rather than the whole feed (which replaces it). */
     private fun cardsJson(feed: io.joryio.sdk.cards.CardFeed, page: Boolean): String {
@@ -1060,7 +1060,7 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun disableCardsUpdates() {
-        cardsSubscription?.close()
+        cardsSubscription?.cancel()
         cardsSubscription = null
     }
 
@@ -1331,7 +1331,7 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
     // and getJsonFlag resolve `{ value }`, so a JSON null stays null in JS.
 
     /** The one native subscription this module holds; closed in invalidate(). */
-    private var flagsSubscription: java.io.Closeable? = null
+    private var flagsSubscription: io.joryio.sdk.JoryioSubscription? = null
 
     @ReactMethod
     fun getFlag(key: String?, defaultValue: Dynamic?, promise: Promise) {
@@ -1503,12 +1503,12 @@ class JoryioModule(private val reactContext: ReactApplicationContext) :
             Joryio.clearLinkHandler()
         }
         synchronized(pendingLinks) { pendingLinks.clear() }
-        placementsSubscription?.close()
+        placementsSubscription?.cancel()
         placementsSubscription = null
-        cardsSubscription?.close()
+        cardsSubscription?.cancel()
         cardsSubscription = null
         synchronized(this) {
-            flagsSubscription?.close()
+            flagsSubscription?.cancel()
             flagsSubscription = null
         }
         super.invalidate()
