@@ -12,7 +12,7 @@ const { JoryioModule } = NativeModules;
  * `X-Joryio-SDK-Wrapper: react-native` (D427), so the dashboard shows the
  * version of THIS package, the one the app upgrades.
  */
-export const SDK_VERSION = '1.4.0';
+export const SDK_VERSION = '1.4.0-beta.6';
 
 /**
  * Mirrors the backend's SUBSCRIPTION_CHANNELS and the web SDK. Five, including
