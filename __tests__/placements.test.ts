@@ -96,6 +96,63 @@ describe('placements (React Native)', () => {
   });
 });
 
+/**
+ * "Show when" (BACKLOG D465): the native SDK holds an item until its moment and
+ * builds the placements request (including an event re-check's `recheckEvent`).
+ * The bridge adds nothing: it must pass the native answer through (a held item
+ * is simply absent; the revealed one arrives on the update event) and must not
+ * build a placements request of its own.
+ */
+describe('placements (React Native): Show when inherits from native', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
+
+  it('exports the shared names and wire values', () => {
+    const sdk = loadSdk(makeNative());
+    expect(sdk.SHOW_WHEN_KINDS).toEqual(['load', 'seconds', 'scroll', 'exit', 'event']);
+    // No capability (owner decision): placements exist only in the 1.4.0 betas.
+    expect('SHOW_WHEN_CAPABILITY' in sdk).toBe(false);
+  });
+
+  it('a held item is absent until native reveals it; the reveal reaches onPlacementsUpdated', async () => {
+    const held = JSON.stringify({ home_hero: { placementKey: 'home_hero', isControl: false, emptyBehavior: 'collapse', maxItems: 1, ttlSeconds: 300, items: [] } });
+    const native = makeNative({ getPlacements: jest.fn().mockResolvedValue(held) });
+    const { default: Joryio } = loadSdk(native);
+    await Joryio.initialize('jry_sdk_ios_test', 'host');
+    expect((await Joryio.getPlacements(['home_hero'])).home_hero.items).toEqual([]);
+    const heard: number[] = [];
+    Joryio.onPlacementsUpdated((p) => heard.push(p.home_hero?.items.length ?? -1));
+    await flush();
+    native.__listeners.get('JoryioPlacementsUpdated')!.forEach((cb) => cb({ json }));
+    expect(heard).toEqual([1]);
+  });
+
+  it('a control answer before its moment: markDisplayed still goes to native, which decides', async () => {
+    const native = makeNative({ getPlacements: jest.fn().mockResolvedValue(json) });
+    const { default: Joryio } = loadSdk(native);
+    await Joryio.initialize('jry_sdk_ios_test', 'host');
+    (await Joryio.getPlacements(['cart_upsell'])).cart_upsell.markDisplayed();
+    expect(native.markPlacement).toHaveBeenCalledWith('cart_upsell', null, 'control', null);
+  });
+
+  it('tripwire: neither native module builds a placements request of its own', () => {
+    const swift = read('ios/JoryioModule.swift');
+    const kt = read('android/src/main/java/io/joryio/reactnative/JoryioModule.kt');
+    for (const src of [swift, kt]) {
+      expect(src).not.toMatch(/in-app\/placements/);
+      expect(src).not.toMatch(/show_when|recheckEvent/);
+    }
+    // Placements come from the native SDK call, which builds the request.
+    expect(swift).toMatch(/Joryio\.shared\.getPlacements\(/);
+    expect(kt).toMatch(/getPlacements\(placementKeys\(keys\)/);
+    // The JS layer builds no placements request either.
+    const ts = read('src/index.ts');
+    expect(ts).not.toMatch(/in-app\/placements/);
+  });
+});
+
 describe('placements (React Native): deep links', () => {
   /** The SDK with a native view component, and React reduced to what JoryioPlacement calls. */
   const loadWithView = () => {

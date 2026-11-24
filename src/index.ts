@@ -12,7 +12,7 @@ const { JoryioModule } = NativeModules;
  * `X-Joryio-SDK-Wrapper: react-native` (D427), so the dashboard shows the
  * version of THIS package, the one the app upgrades.
  */
-export const SDK_VERSION = '1.4.0-beta.8';
+export const SDK_VERSION = '1.4.0-beta.9';
 
 /**
  * Mirrors the backend's SUBSCRIPTION_CHANNELS and the web SDK. Five, including
@@ -650,6 +650,16 @@ export const PLACEMENT_MIN_REFRESH_SECONDS = 30;
 export const PLACEMENT_PRODUCT_ELEMENT_PREFIX = 'product:';
 /** Width of a drawn product card when the app does not set one (dp / points) - the same on every Joryio SDK. */
 export const PLACEMENT_PRODUCT_CARD_WIDTH = 160;
+/**
+ * "Show when" (BACKLOG D465): the moment a placement campaign's content is
+ * revealed on a screen - the `kind` values the wire may carry. The native SDK
+ * (iOS / Android) holds the content and hands it over at its moment: an item
+ * reaches `getPlacements` / `onPlacementsUpdated` / JoryioPlacement only once
+ * revealed. Apps honour `load`, `seconds` and `event`; `scroll` / `exit` are
+ * web-only and never shown.
+ */
+export const SHOW_WHEN_KINDS = ['load', 'seconds', 'scroll', 'exit', 'event'] as const;
+
 /** The elementId a product card's click is reported with - use it with `markClicked` when you draw the cards yourself. */
 export function placementProductElementId(productId: string): string {
   return `${PLACEMENT_PRODUCT_ELEMENT_PREFIX}${productId}`.slice(0, 128);
