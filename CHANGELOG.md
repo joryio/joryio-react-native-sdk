@@ -2,6 +2,10 @@
 
 ## 1.4.0 - 2026-11-18
 
+Fixed (1.4.0-beta.12), inherited from the native SDKs (iOS and Android 1.4.0-beta.12): flag exposures are sent once per person, flag and variant per session across an app relaunch - the native SDKs keep the session's sent marks on the device and clear them on `reset()` and `identify()` of a different user. Nothing changes in the bridge.
+
+Fixed (1.4.0-beta.12), inherited from the native SDKs (iOS and Android 1.4.0-beta.12): on Android the first flags, placements or cards request after the app had been idle could fail at once and never reach the server (a 1.4.0-beta.11 regression); on both platforms a placements or cards request that got no answer no longer holds the next one back for 30 s, only 3 s; and every flag exposures batch carries an `idempotencyKey`, so the server records a batch sent twice once. New constants `PLACEMENT_RETRY_AFTER_FAILURE_SECONDS` and `CARD_RETRY_AFTER_FAILURE_SECONDS` (3) mirror the native ones. Nothing else changes in the bridge.
+
 Fixed (1.4.0-beta.11), inherited from the native SDKs (iOS and Android 1.4.0-beta.11): on Android, `identify()` of a different user no longer carries the previous user's attributes into the new user's flags and in-app requests; flag exposures are no longer counted twice when a connection drops; and at most 20 Show when re-checks run after an outage of the event queue, on both platforms. The bridge holds no attributes of its own, so nothing changes in the bridge.
 
 Fixed (1.4.0-beta.10), inherited from the native SDKs (iOS and Android 1.4.0-beta.10): on Android a whole-number JS value (`track('x', { n: 3 })`, `setAttributes({ seats: 3 })`) reached the server as `3.0`, because React Native hands every JS number to Android as a Double; it now goes as `3`, as on iOS. And on both platforms, past 20 waiting Show when re-checks the oldest tracked is the one dropped. Nothing changes in the bridge: it already passed the values through unchanged.

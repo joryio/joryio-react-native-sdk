@@ -12,7 +12,7 @@ const { JoryioModule } = NativeModules;
  * `X-Joryio-SDK-Wrapper: react-native` (D427), so the dashboard shows the
  * version of THIS package, the one the app upgrades.
  */
-export const SDK_VERSION = '1.4.0-beta.11';
+export const SDK_VERSION = '1.4.0-beta.12';
 
 /**
  * Mirrors the backend's SUBSCRIPTION_CHANNELS and the web SDK. Five, including
@@ -642,6 +642,8 @@ export const IN_APP_DISPLAY_DWELL_MS = 1000;
 export const PLACEMENT_VIEWABLE_FRACTION = 0.5;
 /** A placement key is fetched from the network at most once per this many seconds - the same on every Joryio SDK. */
 export const PLACEMENT_MIN_REFRESH_SECONDS = 30;
+/** After a request that got no answer (or a 5xx) its keys may go again after this many seconds; a 429 keeps the full window - the same on every Joryio SDK (the native SDK applies it). */
+export const PLACEMENT_RETRY_AFTER_FAILURE_SECONDS = 3;
 
 /**
  * A drawn product card's tap is reported as `clicked` with the elementId
@@ -890,6 +892,8 @@ export function JoryioPlacement(props: JoryioPlacementProps): any {
 
 /** The feed goes to the network at most once per this many seconds; extra calls coalesce - the same on every Joryio SDK. */
 export const CARD_MIN_REFRESH_SECONDS = 30;
+/** After a feed request that got no answer (or a 5xx) the next may go after this many seconds; a 429 keeps the full window - the same on every Joryio SDK (the native SDK applies it). */
+export const CARD_RETRY_AFTER_FAILURE_SECONDS = 3;
 /** How long the feed is served from the device cache before it is asked for again - the same on every Joryio SDK. */
 export const CARD_FEED_TTL_SECONDS = 300;
 
