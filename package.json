@@ -1,6 +1,6 @@
 {
   "name": "@joryio/react-native-sdk",
-  "version": "1.4.0-beta.14",
+  "version": "1.4.0-beta.15",
   "description": "Joryio SDK for React Native - bridges native iOS and Android SDKs",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

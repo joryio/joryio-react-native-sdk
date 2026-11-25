@@ -2,6 +2,8 @@
 
 ## 1.4.0 - 2026-11-18
 
+Fixed (1.4.0-beta.15), inherited from the native SDKs (Android 1.4.0-beta.15): on Android, the flags refresh at app foreground is no longer lost to a `NullPointerException` on cold launches - the bridge initializes the SDK on a background thread, and the foreground could arrive before construction finished. A 408 on the flag exposures request is no longer re-sent at once by OkHttp; the batch waits in the native outbox. Nothing changes in the bridge, and iOS is unchanged.
+
 Fixed (1.4.0-beta.14), inherited from the native SDKs (iOS and Android 1.4.0-beta.14): a flag exposure batch whose request failed is no longer sent a second time a few milliseconds later. It goes to the native outbox as having failed once: its first retry waits the first backoff step (4 s), or the answer's `Retry-After` when that is longer (at most 300 s), also across a relaunch. The bridge only reads flags; the native SDK sends and retries the exposures, so nothing changes in the bridge.
 
 Fixed (1.4.0-beta.13), inherited from the native SDKs: more than 100 flag exposures read before one flush are sent as several requests of at most 100 instead of only the first 100. Nothing changes in the bridge.
