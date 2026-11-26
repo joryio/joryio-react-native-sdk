@@ -166,6 +166,7 @@ describe('tracking consent', () => {
       trackingConsent: 'pending',
       optOut: true,
       holdInAppMessagesForHandler: true,
+      sdkWrapperVersion: expect.any(String),
     });
   });
 
@@ -186,12 +187,12 @@ describe('tracking consent', () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('key', 'host', { trackingConsent: 'Denied' as 'denied' });
-    expect(native.initialize).toHaveBeenLastCalledWith('key', 'host', { trackingConsent: 'denied', holdInAppMessagesForHandler: true });
+    expect(native.initialize).toHaveBeenLastCalledWith('key', 'host', { trackingConsent: 'denied', holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
 
     const other = makeNative();
     const { default: Second } = loadSdk(other);
     await Second.initialize('key', 'host', { trackingConsent: 'yes' as 'granted', optOut: false });
-    expect(other.initialize).toHaveBeenLastCalledWith('key', 'host', { optOut: false, holdInAppMessagesForHandler: true });
+    expect(other.initialize).toHaveBeenLastCalledWith('key', 'host', { optOut: false, holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
     expect(warnSpy.mock.calls.flat().join('\n')).toContain("trackingConsent takes 'granted', 'denied' or 'pending'");
   });
 
@@ -350,14 +351,14 @@ describe('null and undefined from host code (contract item 19)', () => {
       enableDebug: true,
       logLevel: null as unknown as 'debug',
     });
-    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { enableDebug: true, holdInAppMessagesForHandler: true });
+    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { enableDebug: true, holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
   });
 
   it('a null config object is an empty one', async () => {
     const native = makeNative();
     const { default: Joryio } = loadSdk(native);
     await Joryio.initialize('key', 'host', null as unknown as object);
-    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { holdInAppMessagesForHandler: true });
+    expect(native.initialize).toHaveBeenCalledWith('key', 'host', { holdInAppMessagesForHandler: true, sdkWrapperVersion: expect.any(String) });
   });
 
   it('a null sdkKey warns and does not switch the SDK off', async () => {
@@ -450,6 +451,17 @@ describe('null and undefined from host code (contract item 19)', () => {
     await expect(Joryio.submitInAppForm(null as unknown as string, {})).resolves.toMatchObject({ ok: false });
     await Joryio.submitInAppForm('c1', null as unknown as Record<string, string>);
     expect(native.submitInAppForm.mock.calls).toEqual([['c1', {}]]);
+  });
+
+  it('submitInAppForm hands native only the campaign id - the native SDK adds the form token it was served - and passes a refusal reason through (D371 item 4)', async () => {
+    // Android answers a JSON string, iOS an object.
+    const refused = { ok: false, reason: 'form_token_expired', message: 'This form has expired. Please close the message and open it again.' };
+    const native = makeNative({ submitInAppForm: jest.fn().mockResolvedValueOnce(JSON.stringify(refused)).mockResolvedValueOnce(refused) });
+    const { default: Joryio } = loadSdk(native);
+    await Joryio.initialize('key', 'host');
+    await expect(Joryio.submitInAppForm('c1', { email: 'a@b.co' })).resolves.toEqual(refused);
+    await expect(Joryio.submitInAppForm('c1', { email: 'a@b.co' })).resolves.toEqual(refused);
+    expect(native.submitInAppForm.mock.calls).toEqual([['c1', { email: 'a@b.co' }], ['c1', { email: 'a@b.co' }]]);
   });
 
   it('a null callback subscribes nothing and returns a callable unsubscribe', async () => {

@@ -20,7 +20,12 @@ RCT_EXTERN_METHOD(identify:(NSString *)userId)
 RCT_EXTERN_METHOD(addAlias:(NSString *)aliasLabel
                   aliasName:(NSString *)aliasName)
 
+RCT_EXTERN_METHOD(identifyFromLink:(NSString *)url)
+
 RCT_EXTERN_METHOD(reset)
+RCT_EXTERN_METHOD(resetTo:(NSString *)anonymousId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(optOut)
 RCT_EXTERN_METHOD(wipeData)
@@ -94,6 +99,82 @@ RCT_EXTERN_METHOD(getAnonymousId:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(syncInAppCampaigns)
+
+RCT_EXTERN_METHOD(getPlacements:(NSArray *)keys
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(refreshPlacements:(NSArray *)keys)
+
+RCT_EXTERN_METHOD(enablePlacementsUpdates)
+
+RCT_EXTERN_METHOD(disablePlacementsUpdates)
+
+RCT_EXTERN_METHOD(markPlacement:(NSString *)placementKey
+                  itemId:(NSString *)itemId
+                  action:(NSString *)action
+                  elementId:(NSString *)elementId)
+
+RCT_EXTERN_METHOD(getCards:(NSString *)cursor
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getUnreadCardCount:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(markCardViewed:(NSString *)cardId)
+
+RCT_EXTERN_METHOD(markCardRead:(NSString *)cardId)
+
+RCT_EXTERN_METHOD(markCardClicked:(NSString *)cardId)
+
+RCT_EXTERN_METHOD(dismissCard:(NSString *)cardId)
+
+RCT_EXTERN_METHOD(refreshCards)
+
+RCT_EXTERN_METHOD(enableCardsUpdates)
+
+RCT_EXTERN_METHOD(disableCardsUpdates)
+
+RCT_EXTERN_METHOD(enableLinkHandler)
+
+RCT_EXTERN_METHOD(disableLinkHandler)
+
+RCT_EXTERN_METHOD(completeLink:(NSString *)linkId
+                  handled:(BOOL)handled)
+
+RCT_EXTERN_METHOD(getFlag:(NSString *)key
+                  defaultValue:(id)defaultValue
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getBoolFlag:(NSString *)key
+                  defaultValue:(BOOL)defaultValue
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getStringFlag:(NSString *)key
+                  defaultValue:(NSString *)defaultValue
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getNumberFlag:(NSString *)key
+                  defaultValue:(double)defaultValue
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getJsonFlag:(NSString *)key
+                  defaultValue:(id)defaultValue
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getAllFlags:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(refreshFlags:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(enableFlagsUpdates)
 
 RCT_EXTERN_METHOD(resetDisplayedCampaigns)
 

@@ -60,6 +60,18 @@ Upgrading from a version that used the `Joryio/UI` pod: if you added a `pod 'Jor
 
 Nothing to add. The bridge depends on `io.joryio:joryio-android-ui` from Maven Central, at the same version as this package; React Native projects already list `mavenCentral()` in their repositories.
 
+A **beta** (`npm install @joryio/react-native-sdk@beta`) asks for the Android SDK beta, which is not on Maven Central: download `joryio-android-<version>-maven-repo.zip` from the matching [joryio-android-sdk pre-release](https://github.com/joryio/joryio-android-sdk/releases), unzip it into a folder of its own (the zip has no top-level folder: `unzip joryio-android-<version>-maven-repo.zip -d joryio-android-<version>-maven-repo`), and add that folder by absolute path to the project-level `android/build.gradle`:
+
+```groovy
+allprojects {
+    repositories {
+        maven { url = uri("/absolute/path/to/joryio-android-<version>-maven-repo") }
+    }
+}
+```
+
+Remove the line when you move to the final release. Full steps, including Expo: [Installing a beta](https://docs.joryio.com/developers/sdk/react-native-sdk#beta).
+
 ### Expo
 
 The SDK is a native module, so it does not run in Expo Go. Use a development build (`npx expo prebuild` or EAS Build) on Expo SDK 52 or newer. Expo's default iOS deployment target can be lower than the 14.0 the SDK needs; raise it with `expo-build-properties` in `app.json`:
@@ -156,6 +168,7 @@ All options are optional:
 | `trackingConsent` | `'granted' \| 'denied' \| 'pending'` | unset | Consent at startup. Leave it unset unless your consent banner has an answer - see [Privacy controls](#privacy-controls) |
 | `optOut` | `boolean` | `false` | Start opted out of tracking |
 | `notificationChannelName` | `string` | `"Notifications"` | Android only: the notification channel name people see in system settings (Android 8+). Pass it localized. Ignored on iOS |
+| `forwardUniversalLinks` | `boolean` | `false` | iOS only: an https link from Joryio content on one of your associated domains goes to your app's own universal-link handling instead of Safari. Ignored on Android |
 
 ## Push notifications
 
@@ -301,6 +314,21 @@ Joryio.removeFromSubscriptionGroup('list_abc123', 'email');
 ```
 
 Channels: `email`, `sms`, `whatsapp`, `push`, `viber`. Statuses: `optedIn`, `subscribed`, `unsubscribed`.
+
+## Recognise people who click your messages
+
+A tracked link in a Joryio message carries a `jr_t` token. When that link opens your app (a universal link, App Link or deep link), pass the URL to the SDK and the visits and events from this device are attributed to the contact the message was sent to (attribution only - nothing is written to that contact's profile, and the device is not signed in as them):
+
+```ts
+import { Linking } from 'react-native';
+
+Linking.getInitialURL().then((url) => {
+  if (url) Joryio.identifyFromLink(url);
+});
+Linking.addEventListener('url', ({ url }) => Joryio.identifyFromLink(url));
+```
+
+A URL without `jr_t` does nothing, so you can pass every URL your app opens, and it is safe before `initialize()`. The SDK acts only when tracking is allowed and nobody is identified on the device: a signed-in user is never re-attached by a link, an opt-out or a denied consent drops the token, and while consent is pending the token is kept in memory and sent once consent is granted. It is never stored on the device.
 
 ## Privacy controls
 

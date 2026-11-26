@@ -22,6 +22,7 @@ class JoryioPackage : ReactPackage {
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
-        return emptyList()
+        // <JoryioPlacement placementKey="..."/> and <JoryioCardFeed /> (D444).
+        return listOf(JoryioPlacementViewManager(), JoryioCardFeedViewManager())
     }
 }

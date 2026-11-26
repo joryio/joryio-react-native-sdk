@@ -79,6 +79,11 @@ describe('package entry points', () => {
       expect(fs.existsSync(main)).toBe(true);
       expect(fs.existsSync(path.join(out, path.basename(pkg.types)))).toBe(true);
 
+      // The build resolves its peer dependencies the way an app's copy does:
+      // from a node_modules beside it. `react` is a devDependency here (the
+      // components import it); react-native stays the mock below.
+      fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(out, 'node_modules'), 'dir');
+
       jest.spyOn(console, 'warn').mockImplementation(() => {});
       let loaded: { default?: { track?: unknown } } | undefined;
       jest.isolateModules(() => {
