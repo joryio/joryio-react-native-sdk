@@ -2,6 +2,8 @@
 
 ## 1.4.0 - 2026-11-18
 
+Fixed (1.4.0-beta.16), inherited from the native SDKs (iOS and Android 1.4.0-beta.16): an event tracked just before `optOut()` is handled the same way every time - dropped, unless a request carrying it had already started when `optOut()` was called (found testing beta.15 on the demo apps, where it was sometimes dropped and sometimes sent). The bridge already handed `track()` and `optOut()` to native in call order in every phase of `initialize()` and dropped what it still held; a new test pins that for each phase and timing. Nothing changes in the bridge. No wire changes.
+
 Fixed (1.4.0-beta.15), inherited from the native SDKs (Android 1.4.0-beta.15): on Android, the flags refresh at app foreground is no longer lost to a `NullPointerException` on cold launches - the bridge initializes the SDK on a background thread, and the foreground could arrive before construction finished. A 408 on the flag exposures request is no longer re-sent at once by OkHttp; the batch waits in the native outbox. Nothing changes in the bridge, and iOS is unchanged.
 
 Fixed (1.4.0-beta.14), inherited from the native SDKs (iOS and Android 1.4.0-beta.14): a flag exposure batch whose request failed is no longer sent a second time a few milliseconds later. It goes to the native outbox as having failed once: its first retry waits the first backoff step (4 s), or the answer's `Retry-After` when that is longer (at most 300 s), also across a relaunch. The bridge only reads flags; the native SDK sends and retries the exposures, so nothing changes in the bridge.
